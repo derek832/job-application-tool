@@ -168,16 +168,18 @@ async def get_job_pdf(
 @router.post("/{job_id}/test-apply")
 async def test_apply_job(
     job_id: str,
+    dry_run: bool = True,
     session: AsyncSession = Depends(get_session),
     _: None = Depends(verify_token),
 ) -> dict:
     """Trigger the Vision Agent on a single job for testing.
 
-    The job must have status 'applying' or 'approved_for_apply' and
-    apply_type 'external_apply' with an external_url set.
+    By default runs in dry_run mode — fills the form but does NOT click submit.
+    Set dry_run=false to actually submit.
 
-    This is a debug/test endpoint — it runs the Vision Agent in isolation
-    without the full pipeline context.
+    Args:
+        job_id: The LinkedIn job ID.
+        dry_run: If True (default), fills form but skips submission.
 
     Args:
         job_id: The LinkedIn job ID.
@@ -248,10 +250,11 @@ async def test_apply_job(
             page=page,
             claude_client=claude_client,
             min_salary=goals.min_salary,
+            dry_run=dry_run,
         )
 
         await page.close()
     finally:
         await pw.stop()
 
-    return {"ok": result.ok, "error": result.error, "reason": result.reason}
+    return {"ok": result.ok, "error": result.error, "reason": result.reason, "dry_run": dry_run}
