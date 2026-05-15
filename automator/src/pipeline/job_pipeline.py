@@ -10,7 +10,9 @@ All state transitions are logged at INFO level with structlog.
 
 from __future__ import annotations
 
+import asyncio
 import os
+import random
 from datetime import UTC, datetime
 
 import structlog
@@ -166,7 +168,13 @@ async def run_pipeline(session: AsyncSession | None = None) -> None:
             keyword_list = [""]  # Run once with no keywords as fallback
 
         discovered: list = []
-        for query_keywords in keyword_list:
+        for i, query_keywords in enumerate(keyword_list):
+            # Randomized delay between queries to avoid detection
+            if i > 0:
+                delay = random.uniform(10.0, 20.0)
+                logger.info("pipeline_inter_query_delay", delay_seconds=round(delay, 1))
+                await asyncio.sleep(delay)
+
             # Build a per-query config with the current keywords
             query_config = SearchConfig(
                 keywords=query_keywords or None,

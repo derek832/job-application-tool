@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import random
 import re
 from dataclasses import dataclass
 from urllib.parse import urlencode
@@ -17,6 +18,13 @@ from src.db.models import JobRecord
 from src.exceptions import ExtractionError
 
 logger = structlog.get_logger(__name__)
+
+
+async def _human_delay(min_seconds: float, max_seconds: float) -> None:
+    """Sleep for a randomized duration to mimic human browsing behavior."""
+    delay = random.uniform(min_seconds, max_seconds)
+    await asyncio.sleep(delay)
+
 
 # Backoff delays (in seconds) for job description extraction retries.
 _EXTRACTION_BACKOFF_DELAYS: list[int] = [5, 15, 30]
@@ -143,7 +151,7 @@ async def discover_and_extract_jobs(
     logger.info("job_discovery_started", search_url=search_url, max_pages=max_pages)
 
     await page.goto(search_url, timeout=60000)
-    await page.wait_for_timeout(5000)
+    await _human_delay(3.0, 6.0)
 
     all_discovered: list[DiscoveredJob] = []
     seen_ids: set[str] = set()
@@ -188,7 +196,7 @@ async def discover_and_extract_jobs(
 
                 # Click the card to load the description in the right panel
                 await card.click()
-                await page.wait_for_timeout(2000)
+                await _human_delay(1.5, 4.0)
 
                 # Extract title and company from the right panel header
                 title = "Unknown"
@@ -241,13 +249,15 @@ async def discover_and_extract_jobs(
                     logger.warning("discovery_no_description", job_id=job_id)
                     continue
 
-                all_discovered.append(DiscoveredJob(
-                    job_id=job_id,
-                    title=title,
-                    company=company,
-                    description=description,
-                    linkedin_url=f"https://www.linkedin.com/jobs/view/{job_id}",
-                ))
+                all_discovered.append(
+                    DiscoveredJob(
+                        job_id=job_id,
+                        title=title,
+                        company=company,
+                        description=description,
+                        linkedin_url=f"https://www.linkedin.com/jobs/view/{job_id}",
+                    )
+                )
 
                 logger.info(
                     "discovery_job_extracted",
@@ -279,12 +289,9 @@ async def discover_and_extract_jobs(
     # Also check against existing DB records to avoid re-scoring known roles
     if all_discovered:
         # Check DB for existing company+title combos
-        existing_records = await session.execute(
-            select(JobRecord.company, JobRecord.job_title)
-        )
+        existing_records = await session.execute(select(JobRecord.company, JobRecord.job_title))
         existing_combos: set[str] = {
-            f"{row.company}|{row.job_title}".lower()
-            for row in existing_records.all()
+            f"{row.company}|{row.job_title}".lower() for row in existing_records.all()
         }
 
         # Deduplicate within the current batch and against DB
@@ -372,6 +379,7 @@ async def _go_to_next_page(page: Page) -> bool:
 
     await next_button.click()
     await page.wait_for_load_state("networkidle")
+    await _human_delay(5.0, 12.0)
     return True
 
 
@@ -507,7 +515,7 @@ async def extract_description(page: Page, job_record: JobRecord) -> str:
             await page.goto(url, wait_until="domcontentloaded", timeout=60000)
 
             # Give the page a moment to render dynamic content
-            await page.wait_for_timeout(3000)
+            await _human_delay(2.0, 4.0)
 
             # Wait for the description to render
             description_text: str | None = None
