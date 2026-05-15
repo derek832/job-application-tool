@@ -74,6 +74,7 @@ export const JobRecordOutSchema = z.object({
   fit_rationale: z.string().nullable(),
   description_text: z.string().nullable(),
   resume_snapshot: z.string().nullable(),
+  tailored_resume_text: z.string().nullable(),
   tailored_resume_pdf: z.string().nullable(),
   cover_letter_text: z.string().nullable(),
   error_message: z.string().nullable(),
@@ -337,6 +338,10 @@ export interface GetJobsParams {
   limit?: number;
 }
 
+const JobRecordOutSchemaLenient = JobRecordOutSchema.extend({
+  tailored_resume_text: z.string().nullable().optional(),
+});
+
 export async function getJobs(params?: GetJobsParams): Promise<JobRecordOut[]> {
   const query = new URLSearchParams();
   if (params?.status) query.set("status", params.status);
@@ -346,11 +351,16 @@ export async function getJobs(params?: GetJobsParams): Promise<JobRecordOut[]> {
 
   const qs = query.toString();
   const path = qs ? `/jobs?${qs}` : "/jobs";
-  return request(path, z.array(JobRecordOutSchema));
+  const data = await request(path, z.array(JobRecordOutSchemaLenient));
+  return data.map((j) => ({ ...j, tailored_resume_text: j.tailored_resume_text ?? null }));
 }
 
 export async function getJob(id: string): Promise<JobRecordOut> {
-  return request(`/jobs/${encodeURIComponent(id)}`, JobRecordOutSchema);
+  const data = await request(
+    `/jobs/${encodeURIComponent(id)}`,
+    JobRecordOutSchemaLenient
+  );
+  return { ...data, tailored_resume_text: data.tailored_resume_text ?? null };
 }
 
 export async function getJobStats(): Promise<StatsOut> {

@@ -191,6 +191,11 @@ class ClaudeClient:
             "- Preserve the meaning and factual accuracy of each bullet point\n"
             "- Focus on: skill terms, action verbs, technical keywords, and industry phrases\n"
             "- Do NOT change the person's name, contact info, dates, or company names\n"
+            "- Do NOT include section headers or category labels (like 'Security Operations:' "
+            "or 'Cloud & Infrastructure:') in your find strings — only replace the content "
+            "AFTER the colon in skills sections\n"
+            "- Keep find strings SHORT (one phrase or clause, not entire bullet points) to "
+            "avoid breaking document formatting\n"
             "- Aim for 5-15 targeted replacements (quality over quantity)\n\n"
             "Respond with ONLY a valid JSON array of objects, no commentary:\n"
             '[{"find": "exact text from resume", "replace": "optimized text"}]\n'
