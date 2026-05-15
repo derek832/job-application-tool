@@ -3,7 +3,7 @@
 ## Blocking — Needed for Full Pipeline
 
 - [x] **Fix tailoring stage async bug** — `'coroutine' object has no attribute 'ok'` in tailoring stage. Same missing `await` pattern as the SMS fix.
-- [ ] **Re-authorize Google Apps Script** — GDocs returns 401. Need to re-deploy or re-authorize the Apps Script web app so resume tailoring and PDF export work.
+- [x] **Re-authorize Google Apps Script** — GDocs returns 401. Need to re-deploy or re-authorize the Apps Script web app so resume tailoring and PDF export work.
 - [x] **Multiple search queries per cycle** — Currently runs one search. Need to support all 4 queries ("Security engineer NOT devsecops", "GRC", "security manager", "cyber security") each cycle.
 - [x] **High-match external apply workflow** — For 90%+ scores that aren't Easy Apply: tailor the resume (ATS-optimized PDF ready) BEFORE sending the SMS notification. The text should say "resume is ready, go apply" not "go tailor and apply." For stretch roles and lower scores, batch these for later review.
 - [ ] **Easy Apply automation** — Fill and submit LinkedIn Easy Apply forms using profile data + tailored resume PDF.
@@ -11,8 +11,8 @@
 
 ## Features to Add
 
-- [ ] **ATS optimization summary on job cards** — Show what changes Claude made to the resume for each job (keywords added, sections rewritten, etc.) in the expandable History card. Requires a new field or storing a diff/summary from the tailoring stage.
-- [ ] **Supplementary context document support** — Add a second Google Doc (or local file) containing weekly work notes/detailed experience that gets passed to Claude alongside the resume during scoring and tailoring. Keeps the resume clean for PDF export while giving Claude richer context for matching and keyword optimization.
+- [x] **ATS optimization summary on job cards** — Show what changes Claude made to the resume for each job (keywords added, sections rewritten, etc.) in the expandable History card. Requires a new field or storing a diff/summary from the tailoring stage.
+- [x] **Supplementary context document support** — Add a second Google Doc (or local file) containing weekly work notes/detailed experience that gets passed to Claude alongside the resume during scoring and tailoring. Keeps the resume clean for PDF export while giving Claude richer context for matching and keyword optimization.
 - [ ] **Application response tracking** — Add statuses like "interview_scheduled" or "response_received" that you can manually set, plus tracking response rates over time.
 - [ ] **Application analytics dashboard** — Track applications over time, response rates, which job titles/companies convert to interviews.
 - [ ] **Salary range extraction** — Parse salary info from job descriptions when not in LinkedIn's structured data, use it for filtering.
