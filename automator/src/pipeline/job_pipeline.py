@@ -131,6 +131,45 @@ async def run_pipeline(session: AsyncSession | None = None) -> None:
     if settings.gdocs_script_url:
         gdocs_client = GDocsClient(endpoint_url=settings.gdocs_script_url)
 
+    # Step 3.5: Generate/refresh pre-filter keywords if profile changed
+    filter_keywords: list[str] = []
+    if claude_client and not skip_discovery:
+        from src.pipeline.prefilter import compute_context_hash, generate_filter_keywords
+
+        current_hash = compute_context_hash(
+            goals_profile.supplementary_context,
+            goals_profile.career_objective,
+            goals_profile.target_titles,
+        )
+        keyword_config = await get_config(session, "filter_keywords") or {}
+        stored_hash = keyword_config.get("hash")
+        stored_keywords = keyword_config.get("keywords", [])
+
+        if stored_hash == current_hash and stored_keywords:
+            filter_keywords = stored_keywords
+            logger.info("prefilter_keywords_loaded_from_cache", count=len(filter_keywords))
+        else:
+            logger.info("prefilter_keywords_regenerating", reason="profile_changed")
+            filter_keywords = await generate_filter_keywords(
+                claude_client=claude_client,
+                supplementary_context=goals_profile.supplementary_context,
+                career_objective=goals_profile.career_objective,
+                target_titles=goals_profile.target_titles,
+            )
+            await set_config(
+                session,
+                "filter_keywords",
+                {
+                    "hash": current_hash,
+                    "keywords": filter_keywords,
+                },
+            )
+            await session.flush()
+    elif not skip_discovery:
+        # No Claude client — try to load cached keywords
+        keyword_config = await get_config(session, "filter_keywords") or {}
+        filter_keywords = keyword_config.get("keywords", [])
+
     # Step 4: Launch Playwright persistent context
     logger.info("pipeline_launching_browser", user_data_dir=_USER_DATA_DIR)
     browser_context: BrowserContext | None = None
@@ -271,6 +310,48 @@ async def run_pipeline(session: AsyncSession | None = None) -> None:
                 goals_json = goals_profile.model_dump_json()
 
                 for job_record in extracted_jobs:
+                    # Pre-filter: check title exclusions
+                    from src.pipeline.prefilter import (
+                        check_keyword_presence,
+                        check_title_exclusions,
+                    )
+
+                    excluded_term = check_title_exclusions(job_record, goals_profile.deal_breakers)
+                    if excluded_term:
+                        from src.db.job_repo import update_job_status
+
+                        await update_job_status(
+                            session,
+                            job_record.id,
+                            "skipped",
+                            reason=f"Title pre-filter: '{excluded_term}'",
+                        )
+                        logger.info(
+                            "prefilter_title_excluded",
+                            job_id=job_record.id,
+                            title=job_record.job_title,
+                            term=excluded_term,
+                        )
+                        continue
+
+                    # Pre-filter: check keyword presence in description
+                    if not check_keyword_presence(job_record, filter_keywords):
+                        from src.db.job_repo import update_job_status
+
+                        await update_job_status(
+                            session,
+                            job_record.id,
+                            "skipped",
+                            reason="Pre-filter: insufficient keyword matches",
+                        )
+                        logger.info(
+                            "prefilter_keyword_excluded",
+                            job_id=job_record.id,
+                            title=job_record.job_title,
+                            company=job_record.company,
+                        )
+                        continue
+
                     try:
                         await run_scoring(
                             job_record=job_record,
