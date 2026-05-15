@@ -99,6 +99,7 @@ export const QueueItemOutSchema = z.object({
 
 export const SearchConfigSchema = z.object({
   keywords: z.string().nullable(),
+  search_queries: z.array(z.string()),
   location: z.string().nullable(),
   job_type: z.string().nullable(),
   experience_level: z.string().nullable(),
@@ -270,14 +271,20 @@ export async function getHealth(): Promise<HealthResponse> {
 // ---------------------------------------------------------------------------
 
 export async function getSearchConfig(): Promise<SearchConfig> {
-  return request("/config/search", SearchConfigSchema);
+  const data = await request("/config/search", SearchConfigSchema.extend({
+    search_queries: z.array(z.string()).optional(),
+  }));
+  return { ...data, search_queries: data.search_queries ?? [] };
 }
 
 export async function updateSearchConfig(data: SearchConfig): Promise<SearchConfig> {
-  return request("/config/search", SearchConfigSchema, {
+  const result = await request("/config/search", SearchConfigSchema.extend({
+    search_queries: z.array(z.string()).optional(),
+  }), {
     method: "PUT",
     body: JSON.stringify(data),
   });
+  return { ...result, search_queries: result.search_queries ?? [] };
 }
 
 export async function getGoalsProfile(): Promise<GoalsProfile> {
