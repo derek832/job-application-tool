@@ -96,8 +96,20 @@ function handleWrite(content) {
   var docId = getDocumentId();
   var doc = DocumentApp.openById(docId);
   var body = doc.getBody();
-  body.clear();
-  body.setText(content);
+
+  // Workaround for "Can't remove the last paragraph" error:
+  // The rule is: you cannot remove the LAST child of a body section.
+  // Strategy: append new content at the end (making it the last child),
+  // then remove all previous children (which are no longer last).
+  var numBefore = body.getNumChildren();
+  body.appendParagraph(content);
+
+  // Now remove all the old elements (indices 0 through numBefore-1)
+  // Remove from index 0 repeatedly since indices shift down
+  for (var i = 0; i < numBefore; i++) {
+    body.removeChild(body.getChild(0));
+  }
+
   doc.saveAndClose();
   return jsonResponse({ success: true });
 }
