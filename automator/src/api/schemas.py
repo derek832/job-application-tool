@@ -232,6 +232,7 @@ class JobRecordOut(BaseModel):
     cover_letter_text: str | None = None
     error_message: str | None = None
     queue_reason: str | None = None
+    application_notes: str | None = None
     discovered_at: str
     extracted_at: str | None = None
     scored_at: str | None = None

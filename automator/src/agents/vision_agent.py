@@ -51,11 +51,13 @@ class Result:
         ok: Whether the operation succeeded.
         error: Human-readable error description when ok is False.
         reason: Machine-readable escalation reason when ok is False.
+        application_notes: JSON string summarizing what was filled/submitted.
     """
 
     ok: bool
     error: str | None = None
     reason: str | None = None
+    application_notes: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -390,6 +392,7 @@ async def process_external_apply(
 
         # Fill text/select fields
         filled_count = 0
+        filled_details: list[dict[str, str]] = []
         for field_info in fill_plan:
             value = field_info.get("value")
             if not value:
@@ -408,6 +411,7 @@ async def process_external_apply(
                 else:
                     await page.fill(selector, sanitized, timeout=5000)
                 filled_count += 1
+                filled_details.append({"field": field_info["label"], "value": sanitized})
                 log.debug("field_filled", label=field_info["label"], selector=selector)
             except Exception as exc:
                 # Try clicking and typing as fallback
@@ -417,6 +421,7 @@ async def process_external_apply(
                         await el.click()
                         await page.keyboard.type(sanitized)
                         filled_count += 1
+                        filled_details.append({"field": field_info["label"], "value": sanitized})
                         log.debug("field_filled_via_type", label=field_info["label"])
                     else:
                         log.debug("field_skip_not_found", label=field_info["label"])
@@ -446,9 +451,13 @@ async def process_external_apply(
         break
 
     # Submit the form (or skip if dry_run)
+    import json as _json
+
+    notes = _json.dumps(filled_details, indent=2) if filled_details else None
+
     if dry_run:
         log.info("dry_run_skipping_submit", fields_filled=True)
-        return Result(ok=True)
+        return Result(ok=True, application_notes=notes)
 
     try:
         submit_button = await page.query_selector(
@@ -475,7 +484,7 @@ async def process_external_apply(
         return Result(ok=False, error=f"Form submission failed: {exc}", reason="submission_failed")
 
     log.info("external_apply_success")
-    return Result(ok=True)
+    return Result(ok=True, application_notes=notes)
 
 
 # ---------------------------------------------------------------------------

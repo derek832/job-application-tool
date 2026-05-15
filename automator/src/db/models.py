@@ -106,6 +106,7 @@ class JobRecord(Base):
     cover_letter_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     queue_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    application_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     discovered_at: Mapped[str] = mapped_column(Text, nullable=False)
     extracted_at: Mapped[str | None] = mapped_column(Text, nullable=True)
     scored_at: Mapped[str | None] = mapped_column(Text, nullable=True)

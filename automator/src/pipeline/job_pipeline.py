@@ -461,6 +461,8 @@ async def run_pipeline(session: AsyncSession | None = None) -> None:
                                 from src.db.job_repo import update_job_status
 
                                 job_record.applied_at = datetime.now(UTC).isoformat()
+                                if result.application_notes:
+                                    job_record.application_notes = result.application_notes
                                 await update_job_status(
                                     session,
                                     job_record.id,
