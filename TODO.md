@@ -6,7 +6,7 @@
 - [x] **Re-authorize Google Apps Script** — GDocs returns 401. Need to re-deploy or re-authorize the Apps Script web app so resume tailoring and PDF export work.
 - [x] **Multiple search queries per cycle** — Currently runs one search. Need to support all 4 queries ("Security engineer NOT devsecops", "GRC", "security manager", "cyber security") each cycle.
 - [x] **High-match external apply workflow** — For 90%+ scores that aren't Easy Apply: tailor the resume (ATS-optimized PDF ready) BEFORE sending the SMS notification. The text should say "resume is ready, go apply" not "go tailor and apply." For stretch roles and lower scores, batch these for later review.
-- [x] **Easy Apply automation** — Fill and submit LinkedIn Easy Apply forms using profile data + tailored resume PDF.
+- [ ] **Easy Apply automation** — Fill and submit LinkedIn Easy Apply forms using profile data + tailored resume PDF. Code is implemented but untested in production.
 - [x] **External apply via Vision Agent** — For non-Easy Apply jobs, navigate to the external ATS, fill forms using DOM extraction + label matching. Escalate to human queue if CAPTCHA or unrecognized fields. Includes ATS account creation, Google OAuth, and email verification.
 
 ## Features to Add
