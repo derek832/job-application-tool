@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 
 # ── Stage 1: build dependencies ──────────────────────────────────────────────
-FROM python:3.11.9-slim AS builder
+FROM python:3.11.9-slim@sha256:3b6efc048405b61ba4baa60f7ccb1f8e131e8ce4ca3b6ebb5108084f68c86c4d AS builder
 
 WORKDIR /build
 
@@ -19,7 +19,7 @@ RUN PLAYWRIGHT_BROWSERS_PATH=/install/ms-playwright \
 
 
 # ── Stage 2: runtime image ────────────────────────────────────────────────────
-FROM python:3.11.9-slim AS runtime
+FROM python:3.11.9-slim@sha256:3b6efc048405b61ba4baa60f7ccb1f8e131e8ce4ca3b6ebb5108084f68c86c4d AS runtime
 
 # Security: run as non-root
 RUN groupadd --gid 1001 appuser && \

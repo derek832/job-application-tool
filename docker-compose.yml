@@ -12,7 +12,6 @@ services:
     environment:
       - CLAUDE_API_KEY=${CLAUDE_API_KEY}
       - GMAIL_USER=${GMAIL_USER}
-      - GMAIL_APP_PASSWORD=${GMAIL_APP_PASSWORD}
       - GOOGLE_APPS_SCRIPT_URL=${GOOGLE_APPS_SCRIPT_URL}
       - API_TOKEN=${API_TOKEN}
       - DATA_DIR=/app/data
