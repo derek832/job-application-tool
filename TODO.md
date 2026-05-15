@@ -1,52 +1,46 @@
 # TODO — Job Application Tool
 
-## Blocking — Needed for Full Pipeline
+## Needs Testing / Debugging
 
-- [x] **Fix tailoring stage async bug** — `'coroutine' object has no attribute 'ok'` in tailoring stage. Same missing `await` pattern as the SMS fix.
-- [x] **Re-authorize Google Apps Script** — GDocs returns 401. Need to re-deploy or re-authorize the Apps Script web app so resume tailoring and PDF export work.
-- [x] **Multiple search queries per cycle** — Currently runs one search. Need to support all 4 queries ("Security engineer NOT devsecops", "GRC", "security manager", "cyber security") each cycle.
-- [x] **High-match external apply workflow** — For 90%+ scores that aren't Easy Apply: tailor the resume (ATS-optimized PDF ready) BEFORE sending the SMS notification. The text should say "resume is ready, go apply" not "go tailor and apply." For stretch roles and lower scores, batch these for later review.
-- [ ] **Easy Apply automation** — Fill and submit LinkedIn Easy Apply forms using profile data + tailored resume PDF. Code is implemented but untested in production.
-- [x] **External apply via Vision Agent** — For non-Easy Apply jobs, navigate to the external ATS, fill forms using DOM extraction + label matching. Escalate to human queue if CAPTCHA or unrecognized fields. Includes ATS account creation, Google OAuth, and email verification.
+- [ ] **Easy Apply automation** — Code is implemented (`easy_apply_stage.py`) but untested in production. Handles LinkedIn's multi-step Easy Apply modal with form filling, resume upload, cover letter, and submission confirmation.
+- [ ] **External apply edge cases** — Vision Agent works on BambooHR. Needs testing on Greenhouse, Lever, Workday, iCIMS. May need fixes for shadow DOM, custom React components, drag-and-drop file uploads.
+- [ ] **ATS account creation** — Registration detection, Google OAuth, and email verification are implemented but untested on real sites.
 
 ## Features to Add
 
-- [x] **ATS optimization summary on job cards** — Show what changes Claude made to the resume for each job (keywords added, sections rewritten, etc.) in the expandable History card. Requires a new field or storing a diff/summary from the tailoring stage.
-- [x] **Supplementary context document support** — Add a second Google Doc (or local file) containing weekly work notes/detailed experience that gets passed to Claude alongside the resume during scoring and tailoring. Keeps the resume clean for PDF export while giving Claude richer context for matching and keyword optimization.
 - [ ] **Application response tracking** — Add statuses like "interview_scheduled" or "response_received" that you can manually set, plus tracking response rates over time.
 - [ ] **Application analytics dashboard** — Track applications over time, response rates, which job titles/companies convert to interviews.
 - [ ] **Salary range extraction** — Parse salary info from job descriptions when not in LinkedIn's structured data, use it for filtering.
 
-## Known Issues / Needs Optimization
+## Known Issues / Low Priority
 
 - [ ] **Company name selector fragile** — Works now but LinkedIn changes their DOM frequently. May need periodic updates to the CSS selectors.
-- [ ] **Chrome debug session management** — The `start-chrome-debug.bat` writes a websocket URL that becomes stale if Chrome restarts. Need auto-detection or a health check before pipeline runs.
-- [ ] **SMS notification content could be richer** — Currently truncated to 160 chars. Consider adding a link to the extension or a brief score/rationale snippet for stretch role notifications.
 - [ ] **Property-based tests not written** — All 16 Hypothesis property tests from the spec are unimplemented (marked optional). Would increase confidence in edge cases for scoring, classification, and rate limiting.
 - [ ] **Integration tests not written** — End-to-end pipeline tests (Easy Apply happy path, External Apply, Human Queue flow, retry exhaustion) are missing.
 
 ## Completed ✓
 
-- [x] **Deal-breaker matching is now contextual** — Removed substring matching. Claude handles deal-breakers with full context (won't flag "associate" in "associate with teams").
-- [x] **Job title/company extracted during discovery** — Combined discover+extract in one pass from the search results page. Clicks each card and reads the right panel.
-- [x] **Scheduled time removed from settings** — Hardcoded to Mon-Fri 8am-8pm Eastern. No user-facing option needed.
-- [x] **Backup directory removed from settings** — Hardcoded to `/app/data/backups`.
-- [x] **Dry run limited to 5 jobs** — Caps discovery at 5 jobs in dry run mode to control costs.
-- [x] **Deduplication by company + title** — Skips jobs where the same company already has a listing with the same title in the DB. Saves Claude tokens.
-- [x] **Tailwind CSS compilation fixed** — Added `@tailwindcss/vite` plugin.
-- [x] **Docker networking fixed** — App binds to `0.0.0.0` inside container; port mapping restricts to `127.0.0.1` on host.
-- [x] **Chrome CDP connection** — Pipeline connects to user's Chrome via remote debugging. No headless login needed.
-- [x] **Settings seeded from .env** — Claude API key, Gmail user, SMS gateway, GDocs URL auto-populate from environment variables on startup.
-- [x] **Activity log on Dashboard** — Shows recent status transitions with 5-second polling.
-- [x] **Clickable links in History and Queue** — Job titles link to LinkedIn listings.
-- [x] **Expandable rationale cards** — Job History rows expand to show Claude's scoring explanation.
-- [x] **Dry run toggle shows ON/OFF text** — Clear button instead of ambiguous slider.
-- [x] **LinkedIn experience level mapping fixed** — Updated to current LinkedIn filter IDs (internship=1, entry=2, associate=3, mid-senior=4, director=5, executive=6).
-- [x] **Claude model ID fixed** — Using `claude-sonnet-4-6` (available on the API key).
-- [x] **JSON parsing fix for Claude responses** — Handles markdown code block wrapping in Claude's output.
-- [x] **Extraction timeout fix** — No longer waits for `networkidle` (LinkedIn never reaches it). Waits for description element directly.
-- [x] **Clone LinkedIn Session button** — Extension can export cookies to the automator (though CDP approach is preferred).
-- [x] **Token storage abstraction** — Works with both `chrome.storage.local` and `localStorage` fallback.
-- [x] **Run Now actually triggers pipeline** — Was only setting status before, now calls `trigger_now()`.
-- [x] **SMS notifications working** — Fixed missing `await` on `send_sms`. Notifications send for stretch roles and boundary scores.
-- [x] **Playwright version mismatch fixed** — Dockerfile installs same version as requirements.txt.
+- [x] **Fix tailoring stage async bug** — Added missing `await` on `send_sms` in notification and scoring stages.
+- [x] **Re-authorize Google Apps Script** — Redeployed with "Anyone" access, fixed `body.setText()` error with append+remove approach, added `follow_redirects=True` to httpx client.
+- [x] **Multiple search queries per cycle** — `search_queries` list field with UI in extension. Pipeline iterates all queries with randomized inter-query delays (10-20s).
+- [x] **High-match external apply workflow** — Configurable `external_apply_threshold` (default 80). Jobs above threshold auto-submit via Vision Agent; below get tailored PDF + SMS notification for manual apply.
+- [x] **External apply via Vision Agent** — DOM-based form field extraction, label matching, resume PDF upload, multi-page handling, CAPTCHA detection, ATS account creation with Google OAuth and email verification.
+- [x] **ATS optimization summary on job cards** — Tailoring replacements stored as JSON, visible in Job History with find→replace diff view.
+- [x] **Supplementary context document support** — `supplementary_context` field on Goals Profile, passed to Claude during scoring and tailoring for richer keyword matching.
+- [x] **Chrome debug session management** — Auto-discovers fresh websocket URL from `/json/version` when stored URL is stale. 3-strategy fallback (stored → discover → direct).
+- [x] **SMS notification content enriched** — Now includes fit score percentage in the message.
+- [x] **Randomized delays for anti-detection** — Card clicks (1.5-4s), page navigation (5-12s), inter-query (10-20s).
+- [x] **AI-generated keyword pre-filter** — Claude extracts 20-30 keywords from profile on first run (cached until profile changes). Jobs must match ≥2 keywords to proceed to scoring.
+- [x] **Format-preserving resume tailoring** — Copies original doc, applies find/replace via Apps Script (preserves fonts, bullets, headings), exports PDF, deletes copy.
+- [x] **Debug mode (skip_discovery)** — `POST /run?skip_discovery=true` skips discovery and scoring, jumps straight to tailoring for approved jobs.
+- [x] **PDF viewing** — `GET /jobs/{id}/pdf` serves tailored PDFs. Link in Job History.
+- [x] **Application notes audit trail** — Vision Agent stores JSON of every field filled, visible in Job History as green "Application Submitted" card.
+- [x] **Apply type detection** — Discovery detects Easy Apply vs External Apply from LinkedIn's button, captures external URL.
+- [x] **Test endpoint** — `POST /jobs/{id}/test-apply?dry_run=true` fills form without submitting for verification.
+- [x] **Deal-breaker matching is now contextual** — Claude handles deal-breakers with full context.
+- [x] **Job title/company extracted during discovery** — Combined discover+extract in one pass.
+- [x] **Deduplication by company + title** — Saves Claude tokens.
+- [x] **Chrome CDP connection** — Pipeline connects to user's Chrome via remote debugging.
+- [x] **Settings seeded from .env** — Auto-populate from environment variables on startup.
+- [x] **SMS notifications working** — Fixed missing `await`. Notifications send for stretch roles and boundary scores.
+- [x] **All previous fixes** — Docker networking, Tailwind, Playwright version, Claude model ID, JSON parsing, extraction timeout, token storage, dry run, activity log, clickable links, expandable cards.
