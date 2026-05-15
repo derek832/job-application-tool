@@ -100,6 +100,57 @@ To add a new dependency:
 | Run CVE audit (Python) | `pip-audit --requirement requirements.txt` | `automator/` |
 | Run CVE audit (Node) | `npm audit --audit-level=moderate` | `extension/` |
 
+## Git Branching Workflow
+
+The repository lives at `https://github.com/derek832/job-application-tool` (private).
+
+### Branch Strategy
+
+- **`main`** — stable, always deployable. Direct commits are forbidden.
+- **`feat/<task-id>-<short-description>`** — one branch per spec task (e.g. `feat/1-scaffolding`, `feat/2.1-db-models`).
+- **`fix/<short-description>`** — for bug fixes not tied to a spec task.
+
+### Workflow for Each Task
+
+```bash
+# 1. Start from latest main
+git checkout main
+git pull origin main
+
+# 2. Create a feature branch
+git checkout -b feat/<task-id>-<short-description>
+
+# 3. Do the work, commit in logical chunks
+git add <specific files>
+git commit -m "feat: <description>"
+
+# 4. Push and open a PR
+git push -u origin feat/<task-id>-<short-description>
+gh pr create --title "<title>" --body "<description>" --base main
+
+# 5. Merge via GitHub (squash merge preferred for clean history)
+gh pr merge --squash
+```
+
+### Commit Message Format
+
+Follow Conventional Commits:
+- `feat:` — new feature or spec task implementation
+- `fix:` — bug fix
+- `refactor:` — code change with no behavior change
+- `test:` — adding or updating tests
+- `docs:` — documentation only
+- `chore:` — build, config, dependency updates
+
+### Rules
+
+- Never commit directly to `main`.
+- Each PR should correspond to one spec task or a logical subset of one.
+- All pre-commit checks must pass before opening a PR (see checklist below).
+- PR titles stay under 70 characters; use the description for details.
+
+---
+
 ## Pre-Commit Checklist
 
 Before committing any change, verify all of the following pass:
