@@ -1,0 +1,24 @@
+# Direct dependencies — edit this file, then run:
+# pip-compile requirements.in --output-file requirements.txt
+# pip-audit --requirement requirements.txt
+# pip-sync requirements.txt
+
+fastapi
+uvicorn[standard]
+sqlalchemy[asyncio]
+aiosqlite
+pydantic
+anthropic
+playwright
+apscheduler
+structlog
+httpx
+hypothesis
+pytest
+pytest-asyncio
+pytest-mock
+respx
+black
+ruff
+pip-tools
+pip-audit
