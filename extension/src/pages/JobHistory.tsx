@@ -1,51 +1,40 @@
-import { useCallback, useEffect, useState } from "react";
-import { getJobs, type GetJobsParams, type JobRecordOut } from "../api/client";
+import { useState, useEffect, useCallback } from "react";
+import { getJobs, ApiError } from "../api/client";
+import type { JobRecordOut } from "../api/client";
 
-const VALID_STATUSES = [
-  "discovered",
-  "extracted",
-  "extraction_failed",
-  "scored",
-  "approved_for_apply",
-  "skipped",
-  "rejected_by_user",
-  "resume_failed",
-  "applying",
-  "apply_failed",
-  "applied",
-  "manually_applied",
-] as const;
-
-const STATUS_COLORS: Record<string, string> = {
-  discovered: "bg-gray-100 text-gray-700",
-  extracted: "bg-blue-100 text-blue-700",
-  extraction_failed: "bg-red-100 text-red-700",
-  scored: "bg-indigo-100 text-indigo-700",
-  approved_for_apply: "bg-green-100 text-green-700",
-  skipped: "bg-yellow-100 text-yellow-700",
-  rejected_by_user: "bg-orange-100 text-orange-700",
-  resume_failed: "bg-red-100 text-red-700",
-  applying: "bg-cyan-100 text-cyan-700",
-  apply_failed: "bg-red-100 text-red-700",
-  applied: "bg-emerald-100 text-emerald-700",
-  manually_applied: "bg-teal-100 text-teal-700",
+const STATUS_DOT: Record<string, string> = {
+  discovered: "bg-gray-400",
+  extracted: "bg-blue-400",
+  scored: "bg-indigo-400",
+  queued: "bg-amber-400",
+  approved: "bg-green-400",
+  applied: "bg-green-600",
+  skipped: "bg-gray-300",
+  rejected: "bg-red-400",
+  error: "bg-red-600",
 };
+
+const STATUS_OPTIONS = [
+  { value: "", label: "All statuses" },
+  { value: "discovered", label: "Discovered" },
+  { value: "extracted", label: "Extracted" },
+  { value: "scored", label: "Scored" },
+  { value: "queued", label: "Queued" },
+  { value: "approved", label: "Approved" },
+  { value: "applied", label: "Applied" },
+  { value: "skipped", label: "Skipped" },
+  { value: "rejected", label: "Rejected" },
+  { value: "error", label: "Error" },
+];
 
 const PAGE_SIZE = 20;
 
-function formatTimestamp(iso: string | null): string {
-  if (!iso) return "—";
-  const date = new Date(iso);
-  return date.toLocaleDateString(undefined, {
-    month: "short",
-    day: "numeric",
-    year: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
+function formatDate(iso: string): string {
+  const d = new Date(iso);
+  return d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }
 
-export function JobHistory() {
+export function JobHistory(): React.JSX.Element {
   const [jobs, setJobs] = useState<JobRecordOut[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -55,184 +44,193 @@ export function JobHistory() {
 
   const fetchJobs = useCallback(async () => {
     setLoading(true);
-    setError(null);
     try {
-      const params: GetJobsParams = {
+      setError(null);
+      const data = await getJobs({
+        search: search || undefined,
+        status: statusFilter || undefined,
         page,
         limit: PAGE_SIZE,
-      };
-      if (search.trim()) {
-        params.search = search.trim();
-      }
-      if (statusFilter) {
-        params.status = statusFilter;
-      }
-      const data = await getJobs(params);
+      });
       setJobs(data);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : "Failed to load jobs";
-      setError(message);
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : "Failed to load jobs");
     } finally {
       setLoading(false);
     }
-  }, [page, search, statusFilter]);
+  }, [search, statusFilter, page]);
 
   useEffect(() => {
-    void fetchJobs();
+    fetchJobs();
   }, [fetchJobs]);
 
-  function handleSearchChange(e: React.ChangeEvent<HTMLInputElement>) {
-    setSearch(e.target.value);
+  function handleSearchSubmit(e: React.FormEvent) {
+    e.preventDefault();
     setPage(1);
-  }
-
-  function handleStatusChange(e: React.ChangeEvent<HTMLSelectElement>) {
-    setStatusFilter(e.target.value);
-    setPage(1);
-  }
-
-  function handlePrevPage() {
-    setPage((p) => Math.max(1, p - 1));
-  }
-
-  function handleNextPage() {
-    setPage((p) => p + 1);
+    fetchJobs();
   }
 
   return (
-    <div className="p-4 space-y-4">
-      <h1 className="text-xl font-semibold text-gray-900">Job History</h1>
+    <div className="p-6 space-y-4">
+      <h2 className="text-lg font-semibold text-gray-900">Job History</h2>
 
       {/* Filters */}
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+      <form onSubmit={handleSearchSubmit} className="flex gap-2">
         <input
           type="text"
-          placeholder="Search by title or company..."
           value={search}
-          onChange={handleSearchChange}
-          className="flex-1 rounded-md border border-gray-300 px-3 py-2 text-sm placeholder-gray-400 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="Search jobs..."
+          className="flex-1 px-3 py-2 text-sm border border-gray-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
         />
         <select
           value={statusFilter}
-          onChange={handleStatusChange}
-          className="rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+          onChange={(e) => {
+            setStatusFilter(e.target.value);
+            setPage(1);
+          }}
+          className="px-3 py-2 text-sm border border-gray-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
         >
-          <option value="">All statuses</option>
-          {VALID_STATUSES.map((s) => (
-            <option key={s} value={s}>
-              {s.replace(/_/g, " ")}
+          {STATUS_OPTIONS.map((opt) => (
+            <option key={opt.value} value={opt.value}>
+              {opt.label}
             </option>
           ))}
         </select>
-      </div>
+      </form>
 
-      {/* Error state */}
       {error && (
-        <div className="rounded-md bg-red-50 p-3 text-sm text-red-700">
+        <div className="bg-red-50 border border-red-200 rounded-lg p-3 text-sm text-red-700">
           {error}
         </div>
       )}
 
-      {/* Loading state */}
-      {loading && (
-        <div className="text-center text-sm text-gray-500 py-8">
-          Loading jobs...
-        </div>
-      )}
-
-      {/* Empty state */}
-      {!loading && !error && jobs.length === 0 && (
-        <div className="text-center text-sm text-gray-500 py-8">
-          No jobs found.
-        </div>
-      )}
-
-      {/* Table */}
-      {!loading && jobs.length > 0 && (
-        <div className="overflow-x-auto rounded-md border border-gray-200">
-          <table className="min-w-full divide-y divide-gray-200 text-sm">
-            <thead className="bg-gray-50">
-              <tr>
-                <th className="px-4 py-3 text-left font-medium text-gray-600">
-                  Title
-                </th>
-                <th className="px-4 py-3 text-left font-medium text-gray-600">
-                  Company
-                </th>
-                <th className="px-4 py-3 text-left font-medium text-gray-600">
-                  Status
-                </th>
-                <th className="px-4 py-3 text-left font-medium text-gray-600">
-                  Fit Score
-                </th>
-                <th className="px-4 py-3 text-left font-medium text-gray-600">
-                  Discovered
-                </th>
-                <th className="px-4 py-3 text-left font-medium text-gray-600">
-                  Applied
-                </th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-gray-100 bg-white">
-              {jobs.map((job) => (
-                <tr key={job.id} className="hover:bg-gray-50">
-                  <td className="px-4 py-3 font-medium text-gray-900 max-w-[200px] truncate">
-                    <a
-                      href={job.linkedin_url}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="hover:text-blue-600 hover:underline"
-                      title={job.job_title}
-                    >
-                      {job.job_title}
-                    </a>
-                  </td>
-                  <td className="px-4 py-3 text-gray-700 max-w-[150px] truncate">
-                    {job.company}
-                  </td>
-                  <td className="px-4 py-3">
-                    <span
-                      className={`inline-block rounded-full px-2 py-0.5 text-xs font-medium ${STATUS_COLORS[job.status] ?? "bg-gray-100 text-gray-700"}`}
-                    >
-                      {job.status.replace(/_/g, " ")}
-                    </span>
-                  </td>
-                  <td className="px-4 py-3 text-gray-700">
-                    {job.fit_score !== null ? job.fit_score : "—"}
-                  </td>
-                  <td className="px-4 py-3 text-gray-500 whitespace-nowrap">
-                    {formatTimestamp(job.discovered_at)}
-                  </td>
-                  <td className="px-4 py-3 text-gray-500 whitespace-nowrap">
-                    {formatTimestamp(job.applied_at)}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+      {/* Job list */}
+      {loading ? (
+        <LoadingSkeleton />
+      ) : jobs.length === 0 ? (
+        <EmptyState />
+      ) : (
+        <div className="bg-white rounded-xl border border-gray-200 shadow-sm divide-y divide-gray-100">
+          {jobs.map((job) => (
+            <JobRow key={job.id} job={job} />
+          ))}
         </div>
       )}
 
       {/* Pagination */}
       {!loading && jobs.length > 0 && (
-        <div className="flex items-center justify-between pt-2">
+        <div className="flex items-center justify-between">
           <button
-            onClick={handlePrevPage}
-            disabled={page <= 1}
-            className="rounded-md border border-gray-300 px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
+            onClick={() => setPage((p) => Math.max(1, p - 1))}
+            disabled={page === 1}
+            className="px-3 py-1.5 text-xs font-medium text-gray-700 bg-white border border-gray-200 rounded-lg hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
           >
             Previous
           </button>
-          <span className="text-sm text-gray-600">Page {page}</span>
+          <span className="text-xs text-gray-500">Page {page}</span>
           <button
-            onClick={handleNextPage}
+            onClick={() => setPage((p) => p + 1)}
             disabled={jobs.length < PAGE_SIZE}
-            className="rounded-md border border-gray-300 px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
+            className="px-3 py-1.5 text-xs font-medium text-gray-700 bg-white border border-gray-200 rounded-lg hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
           >
             Next
           </button>
         </div>
       )}
+    </div>
+  );
+}
+
+function JobRow({ job }: { job: JobRecordOut }): React.JSX.Element {
+  const [expanded, setExpanded] = useState(false);
+
+  return (
+    <div className="border-b border-gray-100 last:border-0">
+      <button
+        onClick={() => setExpanded(!expanded)}
+        className="w-full px-4 py-3 flex items-center gap-3 hover:bg-gray-50 transition-colors text-left"
+      >
+        <span
+          className={`w-2 h-2 rounded-full shrink-0 ${STATUS_DOT[job.status] ?? "bg-gray-400"}`}
+        />
+        <div className="min-w-0 flex-1">
+          <p className="text-sm font-medium text-gray-900 truncate">{job.job_title}</p>
+          <p className="text-xs text-gray-500">{job.company}</p>
+        </div>
+        {job.fit_score !== null && (
+          <span className="text-xs font-medium text-gray-600">{job.fit_score}%</span>
+        )}
+        <span className="text-xs text-gray-400 shrink-0">
+          {formatDate(job.discovered_at)}
+        </span>
+        <svg
+          className={`w-3.5 h-3.5 text-gray-400 shrink-0 transition-transform ${expanded ? "rotate-180" : ""}`}
+          fill="none"
+          viewBox="0 0 24 24"
+          stroke="currentColor"
+          strokeWidth={2}
+        >
+          <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
+        </svg>
+      </button>
+
+      {expanded && (
+        <div className="px-4 pb-3 space-y-2">
+          <a
+            href={job.linkedin_url}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-xs text-blue-600 hover:underline"
+          >
+            View on LinkedIn →
+          </a>
+
+          {job.fit_rationale && (
+            <div className="bg-gray-50 rounded-lg p-3">
+              <p className="text-xs font-medium text-gray-700 mb-1">Scoring Rationale</p>
+              <p className="text-xs text-gray-600 leading-relaxed">{job.fit_rationale}</p>
+            </div>
+          )}
+
+          <div className="flex items-center gap-3 text-xs text-gray-500">
+            <span>Status: <span className="font-medium text-gray-700">{job.status}</span></span>
+            {job.queue_reason && (
+              <span>Reason: <span className="font-medium text-gray-700">{job.queue_reason}</span></span>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function EmptyState(): React.JSX.Element {
+  return (
+    <div className="bg-white rounded-xl border border-gray-200 p-8 text-center shadow-sm">
+      <div className="w-12 h-12 rounded-full bg-gray-100 flex items-center justify-center mx-auto mb-3">
+        <svg className="w-6 h-6 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+          <path strokeLinecap="round" strokeLinejoin="round" d="M20.25 14.15v4.25c0 1.094-.787 2.036-1.872 2.18-2.087.277-4.216.42-6.378.42s-4.291-.143-6.378-.42c-1.085-.144-1.872-1.086-1.872-2.18v-4.25m16.5 0a2.18 2.18 0 00.75-1.661V8.706c0-1.081-.768-2.015-1.837-2.175a48.114 48.114 0 00-3.413-.387m4.5 8.006c-.194.165-.42.295-.673.38A23.978 23.978 0 0112 15.75c-2.648 0-5.195-.429-7.577-1.22a2.016 2.016 0 01-.673-.38m0 0A2.18 2.18 0 013 12.489V8.706c0-1.081.768-2.015 1.837-2.175a48.111 48.111 0 013.413-.387m7.5 0V5.25A2.25 2.25 0 0013.5 3h-3a2.25 2.25 0 00-2.25 2.25v.894m7.5 0a48.667 48.667 0 00-7.5 0" />
+        </svg>
+      </div>
+      <p className="text-sm font-medium text-gray-900">No jobs found</p>
+      <p className="text-xs text-gray-500 mt-1">Try adjusting your search or filters.</p>
+    </div>
+  );
+}
+
+function LoadingSkeleton(): React.JSX.Element {
+  return (
+    <div className="space-y-0 animate-pulse bg-white rounded-xl border border-gray-200 divide-y divide-gray-100">
+      {[1, 2, 3, 4, 5].map((i) => (
+        <div key={i} className="px-4 py-3 flex items-center gap-3">
+          <div className="w-2 h-2 rounded-full bg-gray-200" />
+          <div className="flex-1 space-y-1">
+            <div className="h-3.5 w-3/4 bg-gray-200 rounded" />
+            <div className="h-3 w-1/3 bg-gray-200 rounded" />
+          </div>
+        </div>
+      ))}
     </div>
   );
 }

@@ -80,15 +80,11 @@ async def run_scoring(
         deal_breaker_found=result.deal_breaker_found,
     )
 
-    # 3. Check deal-breakers
-    deal_breaker_found, matched_term = has_deal_breaker(
-        job_record.description_text or "", deal_breakers
-    )
-
-    # Also consider the Claude API's own deal-breaker detection
-    if result.deal_breaker_found:
-        deal_breaker_found = True
-        matched_term = matched_term or result.deal_breaker_term
+    # 3. Check deal-breakers (rely on Claude's contextual analysis only)
+    # We don't do substring matching because terms like "Associate" can appear
+    # in non-deal-breaker contexts (e.g. "associate with teams", "Associate's degree")
+    deal_breaker_found = result.deal_breaker_found
+    matched_term = result.deal_breaker_term
 
     # 4. If deal-breaker found → classify as "skip", set status to "skipped"
     if deal_breaker_found:

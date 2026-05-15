@@ -1,240 +1,275 @@
-import { useState, useEffect, type FormEvent } from "react";
-import {
-  getSettings,
-  updateSettings,
-  type Settings as SettingsType,
-  ApiError,
-} from "../api/client";
-
-type Status = "idle" | "loading" | "saving" | "success" | "error";
-
-/** Fields that contain secrets and must render as password inputs. */
-const SECRET_FIELDS: ReadonlySet<keyof SettingsType> = new Set([
-  "claude_api_key",
-]);
+import { useState, useEffect } from "react";
+import { getSettings, updateSettings, importLinkedInCookies, ApiError } from "../api/client";
+import { saveToken, loadToken, getStorageType } from "../api/token-storage";
+import type { Settings as SettingsType } from "../api/client";
 
 export function Settings(): React.JSX.Element {
+  const [apiToken, setApiToken] = useState("");
   const [form, setForm] = useState<SettingsType>({
     claude_api_key: null,
     gmail_user: null,
     sms_gateway: null,
     gdocs_script_url: null,
-    scheduled_time: null,
-    good_fit_threshold: 75,
+    good_fit_threshold: 70,
     stretch_threshold: 50,
     backup_dir: null,
-    dry_run: true,
+    dry_run: false,
   });
-  const [status, setStatus] = useState<Status>("idle");
-  const [errorMessage, setErrorMessage] = useState<string>("");
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [success, setSuccess] = useState(false);
+  const [tokenSaved, setTokenSaved] = useState(false);
+  const [cloneStatus, setCloneStatus] = useState<string | null>(null);
 
   useEffect(() => {
-    let cancelled = false;
-    setStatus("loading");
-    getSettings()
-      .then((data) => {
-        if (!cancelled) {
-          setForm(data);
-          setStatus("idle");
-        }
-      })
-      .catch((err: unknown) => {
-        if (!cancelled) {
-          setStatus("error");
-          setErrorMessage(err instanceof ApiError ? err.detail : "Failed to load settings.");
-        }
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+    async function load() {
+      // Load API token
+      const storedToken = await loadToken();
+      if (storedToken) {
+        setApiToken(storedToken);
+      }
 
-  function handleStringChange(field: keyof SettingsType, value: string): void {
-    setForm((prev) => ({ ...prev, [field]: value || null }));
-  }
-
-  function handleIntChange(field: keyof SettingsType, value: string): void {
-    const parsed = parseInt(value, 10);
-    setForm((prev) => ({ ...prev, [field]: isNaN(parsed) ? 0 : parsed }));
-  }
-
-  function handleSubmit(e: FormEvent): void {
-    e.preventDefault();
-    setStatus("saving");
-    setErrorMessage("");
-
-    // Build partial payload: only include secret fields if user changed them from the redacted value
-    const payload: Partial<SettingsType> = { ...form };
-
-    // If a secret field still shows the redacted placeholder, exclude it from the update
-    for (const field of SECRET_FIELDS) {
-      if (payload[field] === "***") {
-        delete payload[field];
+      try {
+        // Load settings from server
+        const data = await getSettings();
+        setForm(data);
+      } catch (e) {
+        setError(e instanceof ApiError ? e.message : "Failed to load settings from server");
+      } finally {
+        setLoading(false);
       }
     }
+    load();
+  }, []);
 
-    updateSettings(payload)
-      .then((saved) => {
-        setForm(saved);
-        setStatus("success");
-      })
-      .catch((err: unknown) => {
-        setStatus("error");
-        setErrorMessage(err instanceof ApiError ? err.detail : "Failed to save settings.");
-      });
+  async function handleSaveToken() {
+    try {
+      await saveToken(apiToken);
+      // Verify it was actually saved
+      const verified = await loadToken();
+      if (verified === apiToken) {
+        setTokenSaved(true);
+        setError(null);
+        setTimeout(() => setTokenSaved(false), 2000);
+      } else {
+        setError(`Token save failed — verification mismatch. Using ${getStorageType()}.`);
+      }
+    } catch (e) {
+      setError(
+        `Token save failed (${getStorageType()}): ${e instanceof Error ? e.message : "Unknown error"}`
+      );
+    }
   }
 
-  if (status === "loading") {
-    return <div className="p-4 text-gray-500">Loading settings…</div>;
+  async function handleCloneSession() {
+    setCloneStatus("cloning");
+    setError(null);
+    try {
+      const result = await importLinkedInCookies();
+      setCloneStatus(`✓ ${result.message}`);
+      setTimeout(() => setCloneStatus(null), 3000);
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : "Failed to clone LinkedIn session");
+      setCloneStatus(null);
+    }
+  }
+
+  async function handleSave(e: React.FormEvent) {
+    e.preventDefault();
+    setSaving(true);
+    setError(null);
+    setSuccess(false);
+    try {
+      // Don't send "***" back for claude_api_key if unchanged
+      const payload: Partial<SettingsType> = { ...form };
+      if (form.claude_api_key === "***") {
+        delete payload.claude_api_key;
+      }
+      const updated = await updateSettings(payload);
+      setForm(updated);
+      setSuccess(true);
+      setTimeout(() => setSuccess(false), 2000);
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : "Failed to save");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  if (loading) {
+    return (
+      <div className="p-6 space-y-4 animate-pulse">
+        <div className="h-5 w-24 bg-gray-200 rounded" />
+        {[1, 2, 3, 4, 5, 6].map((i) => (
+          <div key={i} className="h-12 bg-gray-200 rounded-lg" />
+        ))}
+      </div>
+    );
   }
 
   return (
-    <form onSubmit={handleSubmit} className="p-4 space-y-4 max-w-lg">
+    <div className="p-6 space-y-5">
       <h2 className="text-lg font-semibold text-gray-900">Settings</h2>
 
-      {status === "error" && (
-        <div className="rounded bg-red-50 border border-red-200 p-3 text-sm text-red-700">
-          {errorMessage}
-        </div>
-      )}
-      {status === "success" && (
-        <div className="rounded bg-green-50 border border-green-200 p-3 text-sm text-green-700">
-          Settings saved.
+      {error && (
+        <div className="bg-red-50 border border-red-200 rounded-lg p-3 text-sm text-red-700">
+          {error}
         </div>
       )}
 
-      {/* Secret fields */}
-      <fieldset className="space-y-4">
-        <legend className="text-sm font-semibold text-gray-800">Credentials</legend>
+      {/* API Token (local only) */}
+      <div className="bg-white rounded-xl border border-gray-200 p-4 shadow-sm space-y-3">
+        <div>
+          <p className="text-sm font-medium text-gray-900">API Token</p>
+          <p className="text-xs text-gray-500 mt-0.5">
+            Stored locally in the extension. Used to authenticate with the automator.
+          </p>
+        </div>
+        <div className="flex gap-2">
+          <input
+            type="password"
+            value={apiToken}
+            onChange={(e) => setApiToken(e.target.value)}
+            placeholder="Enter your API token"
+            className="flex-1 px-3 py-2 text-sm border border-gray-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+          />
+          <button
+            type="button"
+            onClick={handleSaveToken}
+            className="px-3 py-2 text-xs font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 transition-colors"
+          >
+            {tokenSaved ? "✓" : "Save"}
+          </button>
+        </div>
+      </div>
 
-        <label className="block">
-          <span className="text-sm font-medium text-gray-700">Claude API Key</span>
+      {/* Clone LinkedIn Session */}
+      <div className="bg-white rounded-xl border border-gray-200 p-4 shadow-sm space-y-3">
+        <div>
+          <p className="text-sm font-medium text-gray-900">LinkedIn Session</p>
+          <p className="text-xs text-gray-500 mt-0.5">
+            Clone your LinkedIn cookies so the automator can browse jobs as you.
+            Make sure you're logged into LinkedIn in this browser.
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={handleCloneSession}
+          disabled={cloneStatus === "cloning"}
+          className="w-full px-3 py-2 text-sm font-medium text-white bg-green-600 rounded-lg hover:bg-green-700 disabled:opacity-50 transition-colors"
+        >
+          {cloneStatus === "cloning" ? "Cloning..." : cloneStatus ?? "Clone LinkedIn Session"}
+        </button>
+      </div>
+
+      {/* Server settings form */}
+      <form onSubmit={handleSave} className="space-y-4">
+        <FormField label="Claude API Key">
           <input
             type="password"
             value={form.claude_api_key ?? ""}
-            onChange={(e) => handleStringChange("claude_api_key", e.target.value)}
-            placeholder="sk-ant-…"
-            autoComplete="off"
-            className="mt-1 block w-full rounded border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
+            onChange={(e) => setForm((f) => ({ ...f, claude_api_key: e.target.value || null }))}
+            placeholder="sk-ant-..."
+            className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
           />
-        </label>
+        </FormField>
 
-        <label className="block">
-          <span className="text-sm font-medium text-gray-700">Gmail User</span>
+        <FormField label="Gmail User">
           <input
             type="email"
             value={form.gmail_user ?? ""}
-            onChange={(e) => handleStringChange("gmail_user", e.target.value)}
-            placeholder="your-email@domain.com"
-            autoComplete="off"
-            className="mt-1 block w-full rounded border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
+            onChange={(e) => setForm((f) => ({ ...f, gmail_user: e.target.value || null }))}
+            placeholder="you@gmail.com"
+            className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
           />
-          <span className="text-xs text-gray-500">Gmail/Workspace account (OAuth2 auth — no password needed)</span>
-        </label>
-      </fieldset>
+        </FormField>
 
-      {/* Non-secret fields */}
-      <fieldset className="space-y-4">
-        <legend className="text-sm font-semibold text-gray-800">Notifications & Integration</legend>
-
-        <label className="block">
-          <span className="text-sm font-medium text-gray-700">SMS Gateway</span>
+        <FormField label="SMS Gateway">
           <input
             type="text"
             value={form.sms_gateway ?? ""}
-            onChange={(e) => handleStringChange("sms_gateway", e.target.value)}
-            placeholder="e.g. 5307558669@vtext.com"
-            className="mt-1 block w-full rounded border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
+            onChange={(e) => setForm((f) => ({ ...f, sms_gateway: e.target.value || null }))}
+            placeholder="e.g. 5551234567@tmomail.net"
+            className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
           />
-        </label>
+        </FormField>
 
-        <label className="block">
-          <span className="text-sm font-medium text-gray-700">Google Docs Script URL</span>
+        <FormField label="Google Docs Script URL">
           <input
             type="url"
             value={form.gdocs_script_url ?? ""}
-            onChange={(e) => handleStringChange("gdocs_script_url", e.target.value)}
-            placeholder="https://script.google.com/macros/s/…/exec"
-            className="mt-1 block w-full rounded border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
+            onChange={(e) => setForm((f) => ({ ...f, gdocs_script_url: e.target.value || null }))}
+            placeholder="https://script.google.com/..."
+            className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
           />
-        </label>
-      </fieldset>
+        </FormField>
 
-      <fieldset className="space-y-4">
-        <legend className="text-sm font-semibold text-gray-800">Schedule & Thresholds</legend>
+        <div className="grid grid-cols-2 gap-3">
+          <FormField label="Good Fit Threshold">
+            <input
+              type="number"
+              min={0}
+              max={100}
+              value={form.good_fit_threshold}
+              onChange={(e) =>
+                setForm((f) => ({ ...f, good_fit_threshold: parseInt(e.target.value, 10) || 0 }))
+              }
+              className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+            />
+          </FormField>
+          <FormField label="Stretch Threshold">
+            <input
+              type="number"
+              min={0}
+              max={100}
+              value={form.stretch_threshold}
+              onChange={(e) =>
+                setForm((f) => ({ ...f, stretch_threshold: parseInt(e.target.value, 10) || 0 }))
+              }
+              className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+            />
+          </FormField>
+        </div>
 
-        <label className="flex items-center gap-3">
-          <input
-            type="checkbox"
-            checked={form.dry_run}
-            onChange={(e) => setForm((prev) => ({ ...prev, dry_run: e.target.checked }))}
-            className="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
-          />
-          <span className="text-sm font-medium text-gray-700">Dry Run Mode</span>
-        </label>
-        <span className="block text-xs text-gray-500 -mt-2 ml-7">
-          Runs the full pipeline (search, score, tailor) but skips actual application submission. Turn off when ready to apply for real.
-        </span>
+        {/* Dry Run toggle */}
+        <div className="flex items-center justify-between bg-amber-50 rounded-lg border border-amber-200 px-4 py-3">
+          <div>
+            <p className="text-sm font-medium text-amber-900">Dry Run Mode</p>
+            <p className="text-xs text-amber-700 mt-0.5">
+              When enabled, the system simulates actions without submitting applications.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => setForm((f) => ({ ...f, dry_run: !f.dry_run }))}
+            className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-colors ${
+              form.dry_run
+                ? "bg-amber-500 text-white"
+                : "bg-gray-200 text-gray-700"
+            }`}
+          >
+            {form.dry_run ? "ON" : "OFF"}
+          </button>
+        </div>
 
-        <label className="block">
-          <span className="text-sm font-medium text-gray-700">Scheduled Time</span>
-          <input
-            type="time"
-            value={form.scheduled_time ?? ""}
-            onChange={(e) => handleStringChange("scheduled_time", e.target.value)}
-            className="mt-1 block w-full rounded border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
-          />
-        </label>
+        <button
+          type="submit"
+          disabled={saving}
+          className="w-full px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 disabled:opacity-50 transition-colors"
+        >
+          {saving ? "Saving..." : success ? "✓ Saved" : "Save Settings"}
+        </button>
+      </form>
+    </div>
+  );
+}
 
-        <label className="block">
-          <span className="text-sm font-medium text-gray-700">Good Fit Threshold</span>
-          <input
-            type="number"
-            min={0}
-            max={100}
-            value={form.good_fit_threshold}
-            onChange={(e) => handleIntChange("good_fit_threshold", e.target.value)}
-            className="mt-1 block w-full rounded border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
-          />
-          <span className="text-xs text-gray-500">Score at or above this is auto-approved (default: 75)</span>
-        </label>
-
-        <label className="block">
-          <span className="text-sm font-medium text-gray-700">Stretch Threshold</span>
-          <input
-            type="number"
-            min={0}
-            max={100}
-            value={form.stretch_threshold}
-            onChange={(e) => handleIntChange("stretch_threshold", e.target.value)}
-            className="mt-1 block w-full rounded border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
-          />
-          <span className="text-xs text-gray-500">Score between this and good-fit goes to human queue (default: 50)</span>
-        </label>
-      </fieldset>
-
-      <fieldset className="space-y-4">
-        <legend className="text-sm font-semibold text-gray-800">Storage</legend>
-
-        <label className="block">
-          <span className="text-sm font-medium text-gray-700">Backup Directory</span>
-          <input
-            type="text"
-            value={form.backup_dir ?? ""}
-            onChange={(e) => handleStringChange("backup_dir", e.target.value)}
-            placeholder="/path/to/backup"
-            className="mt-1 block w-full rounded border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
-          />
-        </label>
-      </fieldset>
-
-      <button
-        type="submit"
-        disabled={status === "saving"}
-        className="rounded bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
-      >
-        {status === "saving" ? "Saving…" : "Save"}
-      </button>
-    </form>
+function FormField({ label, children }: { label: string; children: React.ReactNode }): React.JSX.Element {
+  return (
+    <div>
+      <label className="block text-xs font-medium text-gray-600 mb-1.5">{label}</label>
+      {children}
+    </div>
   );
 }

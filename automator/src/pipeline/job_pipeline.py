@@ -23,8 +23,10 @@ from src.api.schemas import GoalsProfile, SearchConfig, Settings, UserProfile
 from src.db.config_repo import get_config, set_config
 from src.db.job_repo import TERMINAL_STATUSES, create_job_record
 from src.db.models import JobRecord
+from src.exceptions import PipelineError
 from src.integrations.gdocs_client import GDocsClient
-from src.integrations.linkedin_scraper import discover_jobs
+from src.integrations.linkedin_scraper import discover_and_extract_jobs
+from src.integrations.linkedin_auth import ensure_linkedin_authenticated
 from src.integrations.sms_gateway import SMSSettings
 from src.pipeline.easy_apply_stage import run_easy_apply
 from src.pipeline.extraction_stage import run_extraction
@@ -37,7 +39,7 @@ logger = structlog.get_logger(__name__)
 _USER_DATA_DIR = os.environ.get("PLAYWRIGHT_USER_DATA_DIR", "data/browser-profile")
 
 
-async def run_pipeline(session: AsyncSession) -> None:
+async def run_pipeline(session: AsyncSession | None = None) -> None:
     """Execute the full job search and application pipeline.
 
     This is the top-level function called by the scheduler. It orchestrates
@@ -60,8 +62,20 @@ async def run_pipeline(session: AsyncSession) -> None:
     Exceptions are caught at the job level — logged and continued with next job.
 
     Args:
-        session: Active async database session for all DB operations.
+        session: Active async database session. If None, creates one internally.
     """
+    from src.db.database import get_session as _get_session
+
+    # If no session provided, create one
+    if session is None:
+        async for s in _get_session():
+            session = s
+            break
+
+    if session is None:
+        logger.error("pipeline_no_session_available")
+        return
+
     logger.info("pipeline_run_started")
 
     # Step 1: Check system_state
@@ -115,54 +129,83 @@ async def run_pipeline(session: AsyncSession) -> None:
 
     try:
         pw = await async_playwright().start()
-        browser_context = await pw.chromium.launch_persistent_context(
-            user_data_dir=_USER_DATA_DIR,
-            headless=True,
-        )
+
+        # Connect to the user's Chrome instance via CDP (remote debugging)
+        # This uses the real browser session — no login needed
+        cdp_url = os.environ.get("CHROME_CDP_URL", "http://host.docker.internal:9222")
+        logger.info("pipeline_connecting_to_chrome", cdp_url=cdp_url)
+
+        try:
+            # Read the websocket URL written by start-chrome-debug.bat
+            ws_url_path = os.path.join("data", "chrome-ws-url.txt")
+            if os.path.exists(ws_url_path):
+                with open(ws_url_path) as f:
+                    ws_url = f.read().strip()
+                logger.info("pipeline_chrome_ws_url_from_file", ws_url=ws_url)
+                browser = await pw.chromium.connect_over_cdp(ws_url)
+            else:
+                logger.info("pipeline_chrome_connecting_direct", url=cdp_url)
+                browser = await pw.chromium.connect_over_cdp(cdp_url)
+
+            browser_context = browser.contexts[0] if browser.contexts else await browser.new_context()
+            logger.info("pipeline_chrome_connected", contexts=len(browser.contexts))
+        except Exception as exc:
+            logger.error(
+                "pipeline_chrome_connection_failed",
+                error=str(exc),
+                hint="Start Chrome with: start-chrome-debug.bat",
+            )
+            return
+
         page = await browser_context.new_page()
 
-        # Step 5: Run job discovery
-        new_job_ids = await discover_jobs(
+        # Step 5+6+7: Discover jobs and extract descriptions in one pass
+        # Clicks each job card in the search results and reads the right panel
+        discovered = await discover_and_extract_jobs(
             page=page,
             config=search_config,
             session=session,
             max_pages=5,
         )
-        logger.info("pipeline_discovery_completed", new_jobs=len(new_job_ids))
 
-        # Step 6: Create JobRecords for newly discovered jobs
-        for job_id in new_job_ids:
+        # Limit to 5 jobs in dry run mode to control costs
+        if settings.dry_run and len(discovered) > 5:
+            discovered = discovered[:5]
+            logger.info("pipeline_dry_run_limited", total_found=len(discovered), limit=5)
+
+        logger.info("pipeline_discovery_completed", new_jobs=len(discovered))
+
+        # Create JobRecords with title, company, and description already populated
+        for job in discovered:
             try:
                 await create_job_record(
                     session,
-                    id=job_id,
-                    job_title="Unknown",
-                    company="Unknown",
-                    linkedin_url=f"https://www.linkedin.com/jobs/view/{job_id}",
+                    id=job.job_id,
+                    job_title=job.title,
+                    company=job.company,
+                    linkedin_url=job.linkedin_url,
                     apply_type="easy_apply",
                 )
-                logger.info("pipeline_job_record_created", job_id=job_id)
-            except Exception as exc:
-                logger.error("pipeline_job_record_creation_failed", job_id=job_id, error=str(exc))
+                # Update the record with the extracted description
+                from src.db.job_repo import update_job_status
 
-        await session.flush()
+                result = await session.execute(
+                    select(JobRecord).where(JobRecord.id == job.job_id)
+                )
+                record = result.scalar_one_or_none()
+                if record:
+                    record.description_text = job.description
+                    record.status = "extracted"
+                    record.extracted_at = datetime.now(UTC).isoformat()
 
-        # Step 7: Run extraction for jobs in "discovered" status
-        discovered_jobs = await _get_jobs_by_status(session, "discovered")
-        for job_record in discovered_jobs:
-            try:
-                await run_extraction(job_record=job_record, page=page, session=session)
                 logger.info(
-                    "pipeline_extraction_completed",
-                    job_id=job_record.id,
-                    new_status=job_record.status,
+                    "pipeline_job_discovered_and_extracted",
+                    job_id=job.job_id,
+                    title=job.title,
+                    company=job.company,
                 )
             except Exception as exc:
-                logger.error(
-                    "pipeline_extraction_error",
-                    job_id=job_record.id,
-                    error=str(exc),
-                )
+                logger.error("pipeline_job_record_creation_failed", job_id=job.job_id, error=str(exc))
 
         await session.flush()
 
@@ -330,12 +373,16 @@ async def run_pipeline(session: AsyncSession) -> None:
     except Exception as exc:
         logger.error("pipeline_fatal_error", error=str(exc))
     finally:
-        # Step 11: Close Playwright context
+        # Step 11: Close the page we created (but NOT the browser — it's the user's Chrome)
         if browser_context:
             try:
-                await browser_context.close()
+                # Only close pages we created, not the whole context
+                for p in browser_context.pages:
+                    if p != page:
+                        continue
+                    await p.close()
             except Exception as exc:
-                logger.error("pipeline_browser_close_error", error=str(exc))
+                logger.error("pipeline_page_close_error", error=str(exc))
         try:
             await pw.stop()
         except Exception:
@@ -410,3 +457,20 @@ def _build_sms_settings(settings: Settings) -> SMSSettings | None:
             sms_gateway=settings.sms_gateway,
         )
     return None
+
+
+def _load_cookies_from_state(state_path: str) -> list[dict[str, object]]:
+    """Load cookies from a Playwright storage state JSON file.
+
+    Args:
+        state_path: Path to the storage-state.json file.
+
+    Returns:
+        List of cookie dicts suitable for browser_context.add_cookies().
+    """
+    import json
+
+    with open(state_path) as f:
+        state = json.load(f)
+
+    return state.get("cookies", [])

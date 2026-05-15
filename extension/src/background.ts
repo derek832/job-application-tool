@@ -7,22 +7,14 @@
  */
 
 import type { ConnectionState } from "./types/connection";
+import { loadToken } from "./api/token-storage";
 
 const ALARM_NAME = "poll-queue";
 const POLL_INTERVAL_MINUTES = 1;
 const BASE_URL = "http://127.0.0.1:7432";
 
-async function getToken(): Promise<string | null> {
-  const result = await chrome.storage.local.get("api_token");
-  const token = result.api_token;
-  if (typeof token !== "string" || token.length === 0) {
-    return null;
-  }
-  return token;
-}
-
 async function pollQueue(): Promise<void> {
-  const token = await getToken();
+  const token = await loadToken();
   if (!token) {
     // No token configured — show nothing on badge
     await chrome.action.setBadgeText({ text: "" });
@@ -94,6 +86,13 @@ chrome.runtime.onInstalled.addListener(() => {
 chrome.runtime.onStartup.addListener(() => {
   chrome.alarms.create(ALARM_NAME, { periodInMinutes: POLL_INTERVAL_MINUTES });
   pollQueue();
+});
+
+// Open the side panel when the extension icon is clicked
+chrome.action.onClicked.addListener((tab) => {
+  if (tab.id) {
+    chrome.sidePanel.open({ tabId: tab.id });
+  }
 });
 
 // Handle alarm fires
