@@ -281,14 +281,20 @@ export async function updateSearchConfig(data: SearchConfig): Promise<SearchConf
 }
 
 export async function getGoalsProfile(): Promise<GoalsProfile> {
-  return request("/config/goals", GoalsProfileSchema);
+  const data = await request("/config/goals", GoalsProfileSchema.extend({
+    supplementary_context: z.string().nullable().optional(),
+  }));
+  return { ...data, supplementary_context: data.supplementary_context ?? null };
 }
 
 export async function updateGoalsProfile(data: GoalsProfile): Promise<GoalsProfile> {
-  return request("/config/goals", GoalsProfileSchema, {
+  const result = await request("/config/goals", GoalsProfileSchema.extend({
+    supplementary_context: z.string().nullable().optional(),
+  }), {
     method: "PUT",
     body: JSON.stringify(data),
   });
+  return { ...result, supplementary_context: result.supplementary_context ?? null };
 }
 
 export async function getUserProfile(): Promise<UserProfile> {
