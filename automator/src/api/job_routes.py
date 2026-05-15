@@ -7,8 +7,11 @@ All endpoints require Bearer token authentication.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.api.schemas import JobRecordOut, StatsOut
@@ -112,3 +115,46 @@ async def get_single_job(
         raise HTTPException(status_code=404, detail=f"Job record not found: {job_id}")
 
     return JobRecordOut.model_validate(record)
+
+
+# ---------------------------------------------------------------------------
+# GET /jobs/{job_id}/pdf
+# ---------------------------------------------------------------------------
+
+
+@router.get("/{job_id}/pdf")
+async def get_job_pdf(
+    job_id: str,
+    session: AsyncSession = Depends(get_session),
+    _: None = Depends(verify_token),
+) -> FileResponse:
+    """Serve the tailored resume PDF for a job record.
+
+    Args:
+        job_id: The LinkedIn job ID (primary key).
+        session: Active async database session.
+
+    Returns:
+        The PDF file as a downloadable response.
+
+    Raises:
+        HTTPException: 404 if no job record or PDF exists.
+    """
+    logger.info("get_job_pdf_requested", job_id=job_id)
+
+    record = await get_job_record(session, job_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail=f"Job record not found: {job_id}")
+
+    if not record.tailored_resume_pdf:
+        raise HTTPException(status_code=404, detail="No tailored PDF available for this job")
+
+    pdf_path = Path(record.tailored_resume_pdf)
+    if not pdf_path.exists():
+        raise HTTPException(status_code=404, detail="PDF file not found on disk")
+
+    return FileResponse(
+        path=pdf_path,
+        media_type="application/pdf",
+        filename=f"resume_{record.company}_{job_id}.pdf",
+    )
