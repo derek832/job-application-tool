@@ -35,6 +35,7 @@ async def run_tailoring(
     gdocs_client: GDocsClient,
     claude_client: ClaudeClient,
     sms_settings: SMSSettings | None = None,
+    supplementary_context: str | None = None,
 ) -> None:
     """Run the resume tailoring stage for a single job record.
 
@@ -54,6 +55,9 @@ async def run_tailoring(
         claude_client: The Claude API client instance for resume tailoring.
         sms_settings: SMTP credentials for SMS notifications. If None,
             notifications are skipped on failure.
+        supplementary_context: Additional experience notes or work details
+            passed to Claude for richer keyword matching. Not included in
+            the final tailored resume output.
     """
     job_id = job_record.id
     logger.info("tailoring_stage_started", job_id=job_id, company=job_record.company)
@@ -74,6 +78,7 @@ async def run_tailoring(
         tailored_content = await claude_client.tailor_resume(
             description=job_record.description_text,
             resume_base=resume_base,
+            supplementary_context=supplementary_context,
         )
     except TailoringError as exc:
         await _handle_tailoring_failure(exc.message, job_record, session, sms_settings)

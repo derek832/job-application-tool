@@ -136,16 +136,21 @@ class ClaudeClient:
             data = json.loads(cleaned)
             return FitScoreResult.model_validate(data)
         except (json.JSONDecodeError, ValidationError) as exc:
-            raise ScoringError(
-                message=f"Failed to parse fit scoring response: {exc}"
-            ) from exc
+            raise ScoringError(message=f"Failed to parse fit scoring response: {exc}") from exc
 
-    async def tailor_resume(self, description: str, resume_base: str) -> str:
+    async def tailor_resume(
+        self,
+        description: str,
+        resume_base: str,
+        supplementary_context: str | None = None,
+    ) -> str:
         """Generate an ATS-optimized tailored resume.
 
         Args:
             description: Full job description text.
             resume_base: The canonical Resume_Base content.
+            supplementary_context: Additional experience notes or work details
+                for richer keyword matching. Not included in the output resume.
 
         Returns:
             The tailored resume text optimized for ATS keywords.
@@ -158,11 +163,21 @@ class ClaudeClient:
             "Preserve all factual content from the original resume. "
             "Do NOT fabricate experience, skills, or credentials."
         )
+
+        context_section = ""
+        if supplementary_context:
+            context_section = (
+                "\n\n## Additional Candidate Context (for keyword matching only — "
+                "do NOT include this text in the output resume)\n"
+                f"{supplementary_context}\n"
+            )
+
         user_prompt = (
             "## Job Description\n"
             f"{description}\n\n"
             "## Original Resume\n"
-            f"{resume_base}\n\n"
+            f"{resume_base}\n"
+            f"{context_section}\n"
             "Rewrite this resume to be ATS-optimized for the job description above. "
             "Incorporate relevant keywords from the job description while preserving "
             "all factual content. Return only the tailored resume text, no commentary."
@@ -313,7 +328,7 @@ class ClaudeClient:
         if text.startswith("```"):
             # Remove opening ``` (with optional language tag)
             first_newline = text.index("\n") if "\n" in text else 3
-            text = text[first_newline + 1:]
+            text = text[first_newline + 1 :]
             # Remove closing ```
             if text.endswith("```"):
                 text = text[:-3]

@@ -237,6 +237,17 @@ async def run_pipeline(session: AsyncSession | None = None) -> None:
         if claude_client:
             extracted_jobs = await _get_jobs_by_status(session, "extracted")
             resume_content = await _load_resume_content(gdocs_client)
+
+            # Append supplementary context (work notes, detailed experience) so
+            # Claude has richer context for scoring and tailoring without polluting
+            # the actual resume used for PDF export.
+            if goals_profile.supplementary_context:
+                resume_content = (
+                    f"{resume_content}\n\n"
+                    f"## Additional Context (not part of resume)\n"
+                    f"{goals_profile.supplementary_context}"
+                )
+
             goals_json = goals_profile.model_dump_json()
 
             for job_record in extracted_jobs:
@@ -281,6 +292,7 @@ async def run_pipeline(session: AsyncSession | None = None) -> None:
                         gdocs_client=gdocs_client,
                         claude_client=claude_client,
                         sms_settings=sms_settings,
+                        supplementary_context=goals_profile.supplementary_context,
                     )
 
                     # Only proceed to apply if tailoring succeeded (status is "applying")

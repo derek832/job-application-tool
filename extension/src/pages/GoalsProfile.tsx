@@ -12,6 +12,7 @@ export function GoalsProfile(): React.JSX.Element {
     deal_breakers: [],
     open_to_stretch: false,
     career_objective: null,
+    supplementary_context: null,
   });
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -158,6 +159,25 @@ export function GoalsProfile(): React.JSX.Element {
             rows={3}
             placeholder="Describe your career goals..."
             className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent resize-none"
+          />
+        </div>
+
+        <div>
+          <label className="block text-xs font-medium text-gray-600 mb-1.5">
+            Supplementary Context
+          </label>
+          <p className="text-xs text-gray-400 mb-1">
+            Additional experience notes, project details, or work context. Passed to Claude for
+            better scoring and keyword matching but not included in the exported resume PDF.
+          </p>
+          <textarea
+            value={form.supplementary_context ?? ""}
+            onChange={(e) =>
+              setForm((f) => ({ ...f, supplementary_context: e.target.value || null }))
+            }
+            rows={6}
+            placeholder="Paste detailed work notes, project descriptions, certifications, or other context that helps Claude match you to jobs..."
+            className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent resize-y"
           />
         </div>
 
