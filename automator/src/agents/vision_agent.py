@@ -242,6 +242,10 @@ async def process_external_apply(
         log.error("navigation_failed", error=str(exc))
         return Result(ok=False, error=f"Navigation failed: {exc}", reason="navigation_failed")
 
+    # Many ATS sites show a job description page first with an "Apply" button.
+    # Try to click through to the actual application form.
+    await _click_through_to_form(page, log)
+
     profile_json = profile.model_dump_json()
     page_count = 0
 
@@ -393,3 +397,50 @@ def _is_captcha_field(field: FormField) -> bool:
     return any(
         indicator in label_lower or indicator in field_id_lower for indicator in captcha_indicators
     )
+
+
+async def _click_through_to_form(page: Page, log) -> None:
+    """Attempt to click an 'Apply' button on a job landing page.
+
+    Many ATS sites (BambooHR, Greenhouse, Lever, Workday) show the job
+    description first with an "Apply" or "Apply for this Job" button that
+    leads to the actual form. This function detects and clicks that button.
+
+    If no apply button is found, assumes we're already on the form.
+
+    Args:
+        page: The Playwright page after navigating to the external URL.
+        log: Bound structlog logger.
+    """
+    import asyncio
+
+    await asyncio.sleep(2)  # Let the page render
+
+    apply_selectors = [
+        "a:has-text('Apply for this Job')",
+        "a:has-text('Apply Now')",
+        "a:has-text('Apply for this Position')",
+        "button:has-text('Apply for this Job')",
+        "button:has-text('Apply Now')",
+        "button:has-text('Apply for this Position')",
+        "a:has-text('Apply')",
+        "button:has-text('Apply')",
+        "a[class*='apply'], a[id*='apply']",
+        "button[class*='apply'], button[id*='apply']",
+    ]
+
+    for selector in apply_selectors:
+        try:
+            btn = await page.query_selector(selector)
+            if btn:
+                is_visible = await btn.is_visible()
+                if is_visible:
+                    log.info("clicking_apply_button", selector=selector)
+                    await btn.click()
+                    await page.wait_for_load_state("domcontentloaded", timeout=15000)
+                    await asyncio.sleep(2)  # Let the form render
+                    return
+        except Exception:
+            continue
+
+    log.debug("no_apply_landing_page_detected")
