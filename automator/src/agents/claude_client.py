@@ -189,12 +189,13 @@ class ClaudeClient:
             "- Each replacement must be an EXACT substring from the original resume\n"
             "- Replace with ATS-optimized phrasing that incorporates job description keywords\n"
             "- Preserve the meaning and factual accuracy of each bullet point\n"
-            "- Focus on: action verbs, technical keywords, and industry phrases\n"
+            "- Focus on: skill terms, action verbs, technical keywords, and industry phrases\n"
             "- Do NOT change the person's name, contact info, dates, or company names\n"
-            "- Do NOT make any replacements in the CORE SKILLS & CERTIFICATIONS section — "
-            "skip it entirely. Only modify text in the SUMMARY and WORK EXPERIENCE sections\n"
+            "- Do NOT change section headers (SUMMARY, CORE SKILLS, WORK EXPERIENCE, etc.)\n"
+            "- Do NOT change the bold category labels before colons (e.g. 'Security Operations:', "
+            "'Cloud & Infrastructure:'). Only replace the skill list text AFTER the colon\n"
             "- Keep find strings SHORT (one phrase or clause, not entire bullet points)\n"
-            "- Aim for 5-15 targeted replacements (quality over quantity)\n\n"
+            "- Aim for 8-15 targeted replacements (quality over quantity)\n\n"
             "Respond with ONLY a valid JSON array of objects, no commentary:\n"
             '[{"find": "exact text from resume", "replace": "optimized text"}]\n'
         )
