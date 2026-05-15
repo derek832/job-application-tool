@@ -155,7 +155,8 @@ class TestGoalsProfile:
 
         get_resp = await client.get("/config/goals")
         assert get_resp.status_code == 200
-        assert get_resp.json() == payload
+        expected = {**payload, "supplementary_context": None}
+        assert get_resp.json() == expected
 
     @pytest.mark.asyncio
     async def test_put_with_empty_lists(self, client: AsyncClient) -> None:
