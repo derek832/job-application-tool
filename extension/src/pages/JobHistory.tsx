@@ -193,6 +193,24 @@ function JobRow({ job }: { job: JobRecordOut }): React.JSX.Element {
             </div>
           )}
 
+          {job.tailored_resume_text && (
+            <TailoringDetails replacementsJson={job.tailored_resume_text} />
+          )}
+
+          {job.tailored_resume_pdf && (
+            <a
+              href={`http://127.0.0.1:7432/jobs/${job.id}/pdf`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1.5 text-xs font-medium text-blue-600 hover:underline"
+            >
+              <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+              </svg>
+              View Tailored PDF
+            </a>
+          )}
+
           <div className="flex items-center gap-3 text-xs text-gray-500">
             <span>Status: <span className="font-medium text-gray-700">{job.status}</span></span>
             {job.queue_reason && (
@@ -215,6 +233,54 @@ function EmptyState(): React.JSX.Element {
       </div>
       <p className="text-sm font-medium text-gray-900">No jobs found</p>
       <p className="text-xs text-gray-500 mt-1">Try adjusting your search or filters.</p>
+    </div>
+  );
+}
+
+function TailoringDetails({
+  replacementsJson,
+}: {
+  replacementsJson: string;
+}): React.JSX.Element {
+  const [showAll, setShowAll] = useState(false);
+
+  let replacements: Array<{ find: string; replace: string }> = [];
+  try {
+    replacements = JSON.parse(replacementsJson);
+  } catch {
+    return (
+      <div className="bg-amber-50 rounded-lg p-3">
+        <p className="text-xs text-amber-700">Could not parse ATS optimizations</p>
+      </div>
+    );
+  }
+
+  if (!Array.isArray(replacements) || replacements.length === 0) return <></>;
+
+  const visible = showAll ? replacements : replacements.slice(0, 3);
+
+  return (
+    <div className="bg-blue-50 rounded-lg p-3">
+      <p className="text-xs font-medium text-blue-800 mb-2">
+        ATS Optimizations ({replacements.length} changes)
+      </p>
+      <div className="space-y-1.5">
+        {visible.map((r, i) => (
+          <div key={i} className="text-xs">
+            <span className="text-red-600 line-through">{r.find}</span>
+            <span className="text-gray-400 mx-1">→</span>
+            <span className="text-green-700 font-medium">{r.replace}</span>
+          </div>
+        ))}
+      </div>
+      {replacements.length > 3 && (
+        <button
+          onClick={() => setShowAll(!showAll)}
+          className="mt-2 text-xs text-blue-600 hover:underline"
+        >
+          {showAll ? "Show less" : `Show all ${replacements.length} changes`}
+        </button>
+      )}
     </div>
   );
 }
