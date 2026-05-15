@@ -312,7 +312,8 @@ class ClaudeClient:
         )
 
         try:
-            data = json.loads(response_text)
+            cleaned = self._extract_json(response_text)
+            data = json.loads(cleaned)
             if not isinstance(data, list):
                 raise ValidationError.from_exception_data(
                     title="FormField",
