@@ -1,187 +1,187 @@
-import { useCallback, useEffect, useState } from "react";
+import { useState, useEffect } from "react";
 import {
-  type QueueItemOut,
-  ApiError,
   getQueue,
   approveQueueItem,
   rejectQueueItem,
   markManuallyApplied,
+  ApiError,
 } from "../api/client";
+import type { QueueItemOut } from "../api/client";
 
-type ActionState = {
-  loading: string | null;
-  error: string | null;
-};
+function formatTime(iso: string): string {
+  const d = new Date(iso);
+  return d.toLocaleString(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
 
-export function HumanQueue() {
+export function HumanQueue(): React.JSX.Element {
   const [items, setItems] = useState<QueueItemOut[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [action, setAction] = useState<ActionState>({ loading: null, error: null });
+  const [actionId, setActionId] = useState<string | null>(null);
 
-  const fetchQueue = useCallback(async () => {
+  async function fetchQueue() {
     try {
-      setLoading(true);
       setError(null);
       const data = await getQueue();
       setItems(data);
-    } catch (err) {
-      if (err instanceof ApiError) {
-        setError(err.message);
-      } else {
-        setError("Failed to load queue items.");
-      }
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : "Failed to load queue");
     } finally {
       setLoading(false);
     }
-  }, []);
+  }
 
   useEffect(() => {
-    void fetchQueue();
-  }, [fetchQueue]);
+    fetchQueue();
+  }, []);
 
-  const handleAction = async (
-    jobId: string,
-    actionFn: (id: string) => Promise<void>,
-    label: string
-  ) => {
-    setAction({ loading: jobId, error: null });
+  async function handleAction(
+    id: string,
+    action: "approve" | "reject" | "manual"
+  ) {
+    setActionId(id);
     try {
-      await actionFn(jobId);
-      await fetchQueue();
-    } catch (err) {
-      const message =
-        err instanceof ApiError
-          ? err.message
-          : `Failed to ${label} item.`;
-      setAction({ loading: null, error: message });
-      return;
+      if (action === "approve") await approveQueueItem(id);
+      else if (action === "reject") await rejectQueueItem(id);
+      else await markManuallyApplied(id);
+      setItems((prev) => prev.filter((item) => item.job_id !== id));
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : "Action failed");
+    } finally {
+      setActionId(null);
     }
-    setAction({ loading: null, error: null });
-  };
-
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center p-8">
-        <p className="text-gray-500 text-sm">Loading queue…</p>
-      </div>
-    );
   }
 
-  if (error) {
-    return (
-      <div className="p-4">
-        <div className="rounded-md bg-red-50 p-4">
-          <p className="text-sm text-red-700">{error}</p>
-          <button
-            onClick={() => void fetchQueue()}
-            className="mt-2 text-sm font-medium text-red-600 hover:text-red-500"
-          >
-            Retry
-          </button>
-        </div>
-      </div>
-    );
-  }
-
-  if (items.length === 0) {
-    return (
-      <div className="flex flex-col items-center justify-center p-8">
-        <p className="text-gray-500 text-sm">No items in the queue.</p>
-        <p className="text-gray-400 text-xs mt-1">
-          Jobs needing your review will appear here.
-        </p>
-      </div>
-    );
-  }
+  if (loading) return <LoadingSkeleton />;
 
   return (
-    <div className="p-4 space-y-3">
-      <h1 className="text-lg font-semibold text-gray-900">Human Queue</h1>
+    <div className="p-6 space-y-5">
+      <h2 className="text-lg font-semibold text-gray-900">Review Queue</h2>
 
-      {action.error && (
-        <div className="rounded-md bg-red-50 p-3">
-          <p className="text-sm text-red-700">{action.error}</p>
+      {error && (
+        <div className="bg-red-50 border border-red-200 rounded-lg p-3 text-sm text-red-700">
+          {error}
         </div>
       )}
 
-      <ul className="space-y-3">
-        {items.map((item) => (
-          <li
-            key={item.job_id}
-            className="rounded-lg border border-gray-200 bg-white p-4 shadow-sm"
+      {items.length === 0 ? (
+        <EmptyState />
+      ) : (
+        <div className="space-y-3">
+          {items.map((item) => (
+            <QueueCard
+              key={item.job_id}
+              item={item}
+              disabled={actionId === item.job_id}
+              onApprove={() => handleAction(item.job_id, "approve")}
+              onReject={() => handleAction(item.job_id, "reject")}
+              onManual={() => handleAction(item.job_id, "manual")}
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+interface QueueCardProps {
+  item: QueueItemOut;
+  disabled: boolean;
+  onApprove: () => void;
+  onReject: () => void;
+  onManual: () => void;
+}
+
+function QueueCard({ item, disabled, onApprove, onReject, onManual }: QueueCardProps): React.JSX.Element {
+  return (
+    <div className="bg-white rounded-xl border border-gray-200 p-4 shadow-sm">
+      <div className="flex items-start justify-between gap-3 mb-3">
+        <div className="min-w-0">
+          <a
+            href={item.linkedin_url}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-sm font-semibold text-blue-700 hover:text-blue-900 hover:underline truncate block"
           >
-            <div className="flex items-start justify-between gap-2">
-              <div className="min-w-0 flex-1">
-                <p className="font-medium text-gray-900 truncate">
-                  {item.job_title}
-                </p>
-                <p className="text-sm text-gray-600">{item.company}</p>
-              </div>
-              {item.fit_score !== null && (
-                <span className="inline-flex items-center rounded-full bg-blue-100 px-2.5 py-0.5 text-xs font-medium text-blue-800">
-                  Score: {item.fit_score}
-                </span>
-              )}
-            </div>
+            {item.job_title}
+          </a>
+          <p className="text-xs text-gray-500 mt-0.5">{item.company}</p>
+        </div>
+        {item.fit_score !== null && (
+          <span className="shrink-0 inline-flex items-center px-2 py-0.5 rounded-md text-xs font-medium bg-blue-50 text-blue-700">
+            {item.fit_score}%
+          </span>
+        )}
+      </div>
 
-            <a
-              href={item.linkedin_url}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="mt-1 inline-block text-sm text-blue-600 hover:text-blue-500 hover:underline truncate max-w-full"
-            >
-              {item.linkedin_url}
-            </a>
+      <div className="flex items-center gap-2 mb-3">
+        {item.queue_reason && (
+          <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-amber-50 text-amber-700">
+            {item.queue_reason}
+          </span>
+        )}
+        <span className="text-xs text-gray-400">{formatTime(item.added_at)}</span>
+      </div>
 
-            {item.queue_reason && (
-              <p className="mt-1 text-xs text-gray-500">
-                Reason: {item.queue_reason}
-              </p>
-            )}
+      {item.fit_rationale && (
+        <div className="bg-gray-50 rounded-lg p-3 mb-3">
+          <p className="text-xs text-gray-600 leading-relaxed">{item.fit_rationale}</p>
+        </div>
+      )}
 
-            {item.fit_rationale && (
-              <p className="mt-1 text-xs text-gray-500 line-clamp-2">
-                {item.fit_rationale}
-              </p>
-            )}
+      <div className="flex items-center gap-2">
+        <button
+          onClick={onApprove}
+          disabled={disabled}
+          className="flex-1 px-3 py-1.5 text-xs font-medium text-green-700 bg-green-50 rounded-lg hover:bg-green-100 disabled:opacity-50 transition-colors"
+        >
+          Approve
+        </button>
+        <button
+          onClick={onReject}
+          disabled={disabled}
+          className="flex-1 px-3 py-1.5 text-xs font-medium text-red-700 bg-red-50 rounded-lg hover:bg-red-100 disabled:opacity-50 transition-colors"
+        >
+          Reject
+        </button>
+        <button
+          onClick={onManual}
+          disabled={disabled}
+          className="flex-1 px-3 py-1.5 text-xs font-medium text-gray-700 bg-gray-100 rounded-lg hover:bg-gray-200 disabled:opacity-50 transition-colors"
+        >
+          Manual
+        </button>
+      </div>
+    </div>
+  );
+}
 
-            <p className="mt-1 text-xs text-gray-400">
-              Added: {new Date(item.added_at).toLocaleString()}
-            </p>
+function EmptyState(): React.JSX.Element {
+  return (
+    <div className="bg-white rounded-xl border border-gray-200 p-8 text-center shadow-sm">
+      <div className="w-12 h-12 rounded-full bg-gray-100 flex items-center justify-center mx-auto mb-3">
+        <svg className="w-6 h-6 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+          <path strokeLinecap="round" strokeLinejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+        </svg>
+      </div>
+      <p className="text-sm font-medium text-gray-900">All caught up</p>
+      <p className="text-xs text-gray-500 mt-1">No items need your review right now.</p>
+    </div>
+  );
+}
 
-            <div className="mt-3 flex gap-2">
-              <button
-                onClick={() =>
-                  void handleAction(item.job_id, approveQueueItem, "approve")
-                }
-                disabled={action.loading === item.job_id}
-                className="rounded-md bg-green-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-green-500 disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                Approve
-              </button>
-              <button
-                onClick={() =>
-                  void handleAction(item.job_id, rejectQueueItem, "reject")
-                }
-                disabled={action.loading === item.job_id}
-                className="rounded-md bg-red-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-red-500 disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                Reject
-              </button>
-              <button
-                onClick={() =>
-                  void handleAction(item.job_id, markManuallyApplied, "mark as manual")
-                }
-                disabled={action.loading === item.job_id}
-                className="rounded-md bg-gray-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-gray-500 disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                Manual
-              </button>
-            </div>
-          </li>
-        ))}
-      </ul>
+function LoadingSkeleton(): React.JSX.Element {
+  return (
+    <div className="p-6 space-y-5 animate-pulse">
+      <div className="h-5 w-32 bg-gray-200 rounded" />
+      {[1, 2, 3].map((i) => (
+        <div key={i} className="h-28 bg-gray-200 rounded-xl" />
+      ))}
     </div>
   );
 }

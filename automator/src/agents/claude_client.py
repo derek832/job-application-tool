@@ -19,8 +19,8 @@ from src.exceptions import ScoringError, TailoringError, VisionAgentError
 
 logger = structlog.get_logger()
 
-MODEL_TEXT = "claude-sonnet-4-20250514"
-MODEL_VISION = "claude-sonnet-4-20250514"
+MODEL_TEXT = "claude-sonnet-4-6"
+MODEL_VISION = "claude-sonnet-4-6"
 RETRY_BACKOFFS = [2, 5, 10]
 
 
@@ -108,8 +108,13 @@ class ClaudeClient:
             f"{resume}\n\n"
             "## Career Goals\n"
             f"{goals}\n\n"
-            "Score this job's fit for the candidate on a scale of 0-100.\n"
-            "Respond with valid JSON matching this schema:\n"
+            "Score this job's fit for the candidate on a scale of 0-100.\n\n"
+            "For deal_breaker_found: only set to true if the JOB ITSELF requires or "
+            "is at a level matching a deal-breaker term. For example, if 'Associate' is "
+            "a deal-breaker, only flag it if the role IS an associate-level position, "
+            "NOT if the word 'associate' appears in other contexts like 'associate with "
+            "teams' or 'Associate's degree preferred'.\n\n"
+            "Respond with ONLY valid JSON (no markdown, no explanation) matching this schema:\n"
             "{\n"
             '  "fit_score": <integer 0-100>,\n'
             '  "rationale": "<string, max 200 words>",\n'
@@ -126,10 +131,14 @@ class ClaudeClient:
         )
 
         try:
-            data = json.loads(response_text)
+            # Claude sometimes wraps JSON in markdown code blocks
+            cleaned = self._extract_json(response_text)
+            data = json.loads(cleaned)
             return FitScoreResult.model_validate(data)
         except (json.JSONDecodeError, ValidationError) as exc:
-            raise ScoringError(message=f"Failed to parse fit scoring response: {exc}") from exc
+            raise ScoringError(
+                message=f"Failed to parse fit scoring response: {exc}"
+            ) from exc
 
     async def tailor_resume(self, description: str, resume_base: str) -> str:
         """Generate an ATS-optimized tailored resume.
@@ -284,6 +293,40 @@ class ClaudeClient:
     # -----------------------------------------------------------------------
     # Internal retry helpers
     # -----------------------------------------------------------------------
+
+    @staticmethod
+    def _extract_json(text: str) -> str:
+        """Extract JSON from Claude's response, handling markdown code blocks.
+
+        Claude sometimes wraps JSON in ```json ... ``` blocks. This strips
+        that wrapper and returns the raw JSON string.
+
+        Args:
+            text: Raw response text from Claude.
+
+        Returns:
+            Cleaned JSON string ready for parsing.
+        """
+        text = text.strip()
+
+        # Remove markdown code block wrapper if present
+        if text.startswith("```"):
+            # Remove opening ``` (with optional language tag)
+            first_newline = text.index("\n") if "\n" in text else 3
+            text = text[first_newline + 1:]
+            # Remove closing ```
+            if text.endswith("```"):
+                text = text[:-3]
+            text = text.strip()
+
+        # If it still doesn't start with { or [, try to find JSON in the text
+        if not text.startswith(("{", "[")):
+            start = text.find("{")
+            if start != -1:
+                # Find the matching closing brace
+                text = text[start:]
+
+        return text
 
     async def _call_with_retry(
         self,

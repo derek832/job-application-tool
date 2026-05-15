@@ -1,92 +1,85 @@
-import { useCallback, useEffect, useState } from "react";
-import {
-  getStatus,
-  triggerRun,
-  pause,
-  resume,
-  ApiError,
-  type StatusResponse,
-} from "../api/client";
+import { useState, useEffect } from "react";
+import { getStatus, getActivityLog, triggerRun, pause, resume, ApiError } from "../api/client";
+import type { StatusResponse, LogEntry } from "../api/client";
 
-type SystemStatus = StatusResponse["status"];
+const STATUS_COLORS: Record<string, string> = {
+  idle: "bg-green-500",
+  running: "bg-yellow-500",
+  paused: "bg-red-500",
+  error: "bg-red-500",
+};
 
-function statusColor(status: SystemStatus): string {
-  switch (status) {
-    case "running":
-      return "bg-green-500";
-    case "paused":
-      return "bg-yellow-500";
-    case "idle":
-      return "bg-gray-400";
-    case "error":
-      return "bg-red-500";
-  }
-}
+const STATUS_LABELS: Record<string, string> = {
+  idle: "Idle",
+  running: "Running",
+  paused: "Paused",
+  error: "Error",
+};
 
-function statusLabel(status: SystemStatus): string {
-  switch (status) {
-    case "running":
-      return "Running";
-    case "paused":
-      return "Paused";
-    case "idle":
-      return "Idle";
-    case "error":
-      return "Error";
-  }
-}
-
-function formatTimestamp(iso: string | null): string {
+function formatTime(iso: string | null): string {
   if (!iso) return "—";
-  const date = new Date(iso);
-  return date.toLocaleString();
+  const d = new Date(iso);
+  return d.toLocaleString(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
 }
 
-function formatRate(rate: number): string {
-  return `${(rate * 100).toFixed(1)}%`;
-}
-
-export default function Dashboard() {
+export function Dashboard(): React.JSX.Element {
   const [data, setData] = useState<StatusResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [actionLoading, setActionLoading] = useState(false);
+  const [activityLog, setActivityLog] = useState<LogEntry[]>([]);
 
-  const fetchStatus = useCallback(async () => {
+  async function fetchStatus() {
     try {
+      setError(null);
       const status = await getStatus();
       setData(status);
-      setError(null);
-    } catch (err) {
-      if (err instanceof ApiError) {
-        setError(err.message);
-      } else {
-        setError("Unable to reach the Automator service.");
-      }
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : "Failed to load status");
     } finally {
       setLoading(false);
     }
-  }, []);
+  }
+
+  async function fetchLog() {
+    try {
+      const entries = await getActivityLog(20);
+      setActivityLog(entries);
+    } catch {
+      // Non-critical — don't show error for log fetch failures
+    }
+  }
 
   useEffect(() => {
-    void fetchStatus();
-  }, [fetchStatus]);
+    fetchStatus();
+    fetchLog();
 
-  const handleRunNow = async () => {
+    // Poll every 5 seconds when running
+    const interval = setInterval(() => {
+      fetchStatus();
+      fetchLog();
+    }, 5000);
+    return () => clearInterval(interval);
+  }, []);
+
+  async function handleRun() {
     setActionLoading(true);
     try {
       await triggerRun();
       await fetchStatus();
-    } catch (err) {
-      if (err instanceof ApiError) {
-        setError(err.message);
-      }
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : "Action failed");
     } finally {
       setActionLoading(false);
     }
-  };
+  }
 
-  const handleTogglePause = async () => {
+  async function handleTogglePause() {
     if (!data) return;
     setActionLoading(true);
     try {
@@ -96,146 +89,163 @@ export default function Dashboard() {
         await pause();
       }
       await fetchStatus();
-    } catch (err) {
-      if (err instanceof ApiError) {
-        setError(err.message);
-      }
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : "Action failed");
     } finally {
       setActionLoading(false);
     }
-  };
-
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center p-8">
-        <p className="text-sm text-gray-500">Loading dashboard...</p>
-      </div>
-    );
   }
+
+  if (loading) return <LoadingSkeleton />;
 
   if (error && !data) {
     return (
-      <div className="p-4">
-        <div className="rounded-md bg-red-50 p-4">
-          <p className="text-sm text-red-700">{error}</p>
-          <button
-            onClick={() => {
-              setLoading(true);
-              void fetchStatus();
-            }}
-            className="mt-2 text-sm font-medium text-red-600 hover:text-red-500"
-          >
-            Retry
-          </button>
+      <div className="p-6">
+        <div className="bg-red-50 border border-red-200 rounded-xl p-4 text-sm text-red-700">
+          {error}
         </div>
       </div>
     );
   }
 
-  if (!data) return null;
+  if (!data) return <div />;
 
-  const isPaused = data.status === "paused";
+  const stats = [
+    { label: "Discovered", value: data.stats.total_discovered },
+    { label: "Applied", value: data.stats.total_applied },
+    { label: "Skipped", value: data.stats.total_skipped },
+    { label: "Pending", value: data.stats.total_pending_review },
+  ];
+
+  const healthItems = [
+    { label: "Claude API", ok: data.health.claude_api },
+    { label: "Gmail", ok: data.health.gmail },
+    { label: "Google Docs", ok: data.health.google_docs },
+  ];
 
   return (
-    <div className="space-y-4 p-4">
-      {/* Status Header */}
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <span
-            className={`inline-block h-3 w-3 rounded-full ${statusColor(data.status)}`}
-          />
-          <span className="text-sm font-medium text-gray-900">
-            {statusLabel(data.status)}
-          </span>
-        </div>
-        <span className="inline-flex items-center rounded-full bg-blue-100 px-2.5 py-0.5 text-xs font-medium text-blue-800">
-          Queue: {data.queue_count}
-        </span>
-      </div>
+    <div className="p-6 space-y-5">
+      <h2 className="text-lg font-semibold text-gray-900">Dashboard</h2>
 
-      {/* Error Banner */}
       {error && (
-        <div className="rounded-md bg-red-50 p-3">
-          <p className="text-xs text-red-700">{error}</p>
+        <div className="bg-red-50 border border-red-200 rounded-lg p-3 text-sm text-red-700">
+          {error}
         </div>
       )}
 
-      {/* Run Times */}
+      {/* Status card */}
+      <div className="bg-white rounded-xl border border-gray-200 p-4 shadow-sm">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <span className={`w-2.5 h-2.5 rounded-full ${STATUS_COLORS[data.status]}`} />
+            <span className="text-sm font-medium text-gray-900">
+              {STATUS_LABELS[data.status]}
+            </span>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={handleRun}
+              disabled={actionLoading || data.status === "running"}
+              className="px-3 py-1.5 text-xs font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+            >
+              Run Now
+            </button>
+            <button
+              onClick={handleTogglePause}
+              disabled={actionLoading}
+              className="px-3 py-1.5 text-xs font-medium text-gray-700 bg-gray-100 rounded-lg hover:bg-gray-200 disabled:opacity-50 transition-colors"
+            >
+              {data.status === "paused" ? "Resume" : "Pause"}
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {/* Stats grid */}
       <div className="grid grid-cols-2 gap-3">
-        <div className="rounded-md bg-gray-50 p-3">
-          <p className="text-xs text-gray-500">Last Run</p>
-          <p className="text-sm font-medium text-gray-900">
-            {formatTimestamp(data.last_run_at)}
-          </p>
-        </div>
-        <div className="rounded-md bg-gray-50 p-3">
-          <p className="text-xs text-gray-500">Next Run</p>
-          <p className="text-sm font-medium text-gray-900">
-            {formatTimestamp(data.next_run_at)}
-          </p>
+        {stats.map((s) => (
+          <div key={s.label} className="bg-white rounded-xl border border-gray-200 p-4 shadow-sm">
+            <p className="text-xs text-gray-500 mb-1">{s.label}</p>
+            <p className="text-2xl font-semibold text-gray-900">{s.value}</p>
+          </div>
+        ))}
+      </div>
+
+      {/* Health indicators */}
+      <div className="bg-white rounded-xl border border-gray-200 p-4 shadow-sm">
+        <p className="text-xs text-gray-500 mb-3">Service Health</p>
+        <div className="flex gap-2">
+          {healthItems.map((h) => (
+            <span
+              key={h.label}
+              className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium ${
+                h.ok
+                  ? "bg-green-50 text-green-700"
+                  : "bg-red-50 text-red-700"
+              }`}
+            >
+              <span className={`w-1.5 h-1.5 rounded-full ${h.ok ? "bg-green-500" : "bg-red-500"}`} />
+              {h.label}
+            </span>
+          ))}
         </div>
       </div>
 
-      {/* Summary Stats */}
-      <div className="rounded-md border border-gray-200 p-3">
-        <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-gray-500">
-          Statistics
-        </h3>
-        <div className="grid grid-cols-2 gap-2 text-sm">
-          <div className="flex justify-between">
-            <span className="text-gray-600">Discovered</span>
-            <span className="font-medium text-gray-900">
-              {data.stats.total_discovered}
-            </span>
+      {/* Timestamps */}
+      <div className="bg-white rounded-xl border border-gray-200 p-4 shadow-sm">
+        <div className="grid grid-cols-2 gap-4">
+          <div>
+            <p className="text-xs text-gray-500 mb-0.5">Last Run</p>
+            <p className="text-sm font-medium text-gray-900">{formatTime(data.last_run_at)}</p>
           </div>
-          <div className="flex justify-between">
-            <span className="text-gray-600">Applied</span>
-            <span className="font-medium text-gray-900">
-              {data.stats.total_applied}
-            </span>
-          </div>
-          <div className="flex justify-between">
-            <span className="text-gray-600">Skipped</span>
-            <span className="font-medium text-gray-900">
-              {data.stats.total_skipped}
-            </span>
-          </div>
-          <div className="flex justify-between">
-            <span className="text-gray-600">Pending Review</span>
-            <span className="font-medium text-gray-900">
-              {data.stats.total_pending_review}
-            </span>
-          </div>
-          <div className="col-span-2 flex justify-between border-t border-gray-100 pt-2">
-            <span className="text-gray-600">Success Rate</span>
-            <span className="font-medium text-gray-900">
-              {formatRate(data.stats.application_success_rate)}
-            </span>
+          <div>
+            <p className="text-xs text-gray-500 mb-0.5">Next Run</p>
+            <p className="text-sm font-medium text-gray-900">{formatTime(data.next_run_at)}</p>
           </div>
         </div>
       </div>
 
-      {/* Action Buttons */}
-      <div className="flex gap-2">
-        <button
-          onClick={() => void handleRunNow()}
-          disabled={actionLoading || isPaused}
-          className="flex-1 rounded-md bg-blue-600 px-3 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
-        >
-          {actionLoading ? "..." : "Run Now"}
-        </button>
-        <button
-          onClick={() => void handleTogglePause()}
-          disabled={actionLoading}
-          className={`flex-1 rounded-md px-3 py-2 text-sm font-medium ${
-            isPaused
-              ? "bg-green-600 text-white hover:bg-green-700"
-              : "bg-yellow-500 text-white hover:bg-yellow-600"
-          } disabled:cursor-not-allowed disabled:opacity-50`}
-        >
-          {actionLoading ? "..." : isPaused ? "Resume" : "Pause"}
-        </button>
+      {/* Activity Log */}
+      <div className="bg-white rounded-xl border border-gray-200 p-4 shadow-sm">
+        <p className="text-xs text-gray-500 mb-3">Recent Activity</p>
+        {activityLog.length === 0 ? (
+          <p className="text-xs text-gray-400">No activity yet</p>
+        ) : (
+          <div className="space-y-1 max-h-48 overflow-y-auto">
+            {activityLog.map((entry, i) => (
+              <div key={i} className="flex items-start gap-2 text-xs py-1 border-t border-gray-100 first:border-0">
+                <span className="text-gray-400 shrink-0 w-12">
+                  {new Date(entry.timestamp).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })}
+                </span>
+                <span className="text-gray-600 truncate">
+                  <span className="font-medium text-gray-900">{entry.job_id.slice(0, 8)}</span>
+                  {" → "}
+                  <span className={entry.to_status === "applied" ? "text-green-600 font-medium" : entry.to_status.includes("failed") ? "text-red-600" : ""}>
+                    {entry.to_status}
+                  </span>
+                  {entry.reason && <span className="text-gray-400"> · {entry.reason}</span>}
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
+    </div>
+  );
+}
+
+function LoadingSkeleton(): React.JSX.Element {
+  return (
+    <div className="p-6 space-y-5 animate-pulse">
+      <div className="h-5 w-24 bg-gray-200 rounded" />
+      <div className="h-16 bg-gray-200 rounded-xl" />
+      <div className="grid grid-cols-2 gap-3">
+        {[1, 2, 3, 4].map((i) => (
+          <div key={i} className="h-20 bg-gray-200 rounded-xl" />
+        ))}
+      </div>
+      <div className="h-16 bg-gray-200 rounded-xl" />
+      <div className="h-16 bg-gray-200 rounded-xl" />
     </div>
   );
 }

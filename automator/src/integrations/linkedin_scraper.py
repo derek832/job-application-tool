@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import re
+from dataclasses import dataclass
 from urllib.parse import urlencode
 
 import structlog
@@ -30,11 +31,12 @@ _JOB_TYPE_MAP: dict[str, str] = {
 
 # LinkedIn query parameter mappings for experience level
 _EXPERIENCE_LEVEL_MAP: dict[str, str] = {
-    "entry": "1",
-    "associate": "2",
-    "mid-senior": "3",
-    "director": "4",
-    "executive": "5",
+    "internship": "1",
+    "entry": "2",
+    "associate": "3",
+    "mid-senior": "4",
+    "director": "5",
+    "executive": "6",
 }
 
 # LinkedIn query parameter mappings for remote preference
@@ -92,6 +94,227 @@ def build_search_url(config: SearchConfig) -> str:
 # Regex pattern to extract job IDs from LinkedIn listing URLs.
 # Matches paths like /jobs/view/3987654321/ or /jobs/view/3987654321
 _JOB_ID_PATTERN = re.compile(r"/jobs/view/(\d+)")
+
+# Selectors for the job description in the right panel of search results
+_RIGHT_PANEL_DESCRIPTION_SELECTORS: list[str] = [
+    "div.jobs-description__content",
+    "div.jobs-description-content__text",
+    "div#job-details",
+    "div.jobs-box__html-content",
+    "section.show-more-less-html",
+    "article.jobs-description__container",
+    "div[class*='jobs-description']",
+]
+
+
+@dataclass
+class DiscoveredJob:
+    """Job data extracted from the search results page."""
+
+    job_id: str
+    title: str
+    company: str
+    description: str
+    linkedin_url: str
+
+
+async def discover_and_extract_jobs(
+    page: Page,
+    config: SearchConfig,
+    session: AsyncSession,
+    max_pages: int = 5,
+) -> list[DiscoveredJob]:
+    """Discover jobs and extract descriptions from the search results page.
+
+    Instead of navigating to each job's individual page, this clicks each job
+    card in the left panel and reads the description from the right panel.
+    Much faster and more reliable than separate navigation.
+
+    Args:
+        page: A Playwright Page object (already authenticated with LinkedIn).
+        config: The search configuration to build the LinkedIn search URL.
+        session: Active async database session for deduplication queries.
+        max_pages: Maximum number of result pages to scrape. Defaults to 5.
+
+    Returns:
+        A list of DiscoveredJob objects with title, company, and description.
+    """
+    search_url = build_search_url(config)
+    logger.info("job_discovery_started", search_url=search_url, max_pages=max_pages)
+
+    await page.goto(search_url, timeout=60000)
+    await page.wait_for_timeout(5000)
+
+    all_discovered: list[DiscoveredJob] = []
+    seen_ids: set[str] = set()
+
+    for page_num in range(1, max_pages + 1):
+        # Find all job cards on the current page
+        job_cards = await page.query_selector_all(
+            "li[class*='jobs-search-results__list-item'], "
+            "div[class*='job-card-container'], "
+            "li[data-occludable-job-id]"
+        )
+
+        if not job_cards:
+            # Fallback: find links to job views
+            job_cards = await page.query_selector_all("a[href*='/jobs/view/']")
+
+        logger.info("discovery_page_cards_found", page=page_num, count=len(job_cards))
+
+        for card in job_cards:
+            try:
+                # Extract job ID from the card's link
+                link = await card.query_selector("a[href*='/jobs/view/']")
+                if link is None:
+                    # The card itself might be the link
+                    href = await card.get_attribute("href")
+                    if href is None:
+                        continue
+                else:
+                    href = await link.get_attribute("href")
+
+                if href is None:
+                    continue
+
+                match = _JOB_ID_PATTERN.search(href)
+                if not match:
+                    continue
+
+                job_id = match.group(1)
+                if job_id in seen_ids:
+                    continue
+                seen_ids.add(job_id)
+
+                # Click the card to load the description in the right panel
+                await card.click()
+                await page.wait_for_timeout(2000)
+
+                # Extract title and company from the right panel header
+                title = "Unknown"
+                company = "Unknown"
+
+                title_el = await page.query_selector(
+                    "h1.t-24, h2.t-24, h1[class*='job-title'], "
+                    "h2[class*='jobs-unified-top-card__job-title'], "
+                    "a[class*='job-title']"
+                )
+                if title_el:
+                    title = (await title_el.inner_text()).strip()
+
+                # Try to get company from the right panel
+                company_el = await page.query_selector(
+                    "div.job-details-jobs-unified-top-card__company-name a, "
+                    "span.jobs-unified-top-card__company-name, "
+                    "a[class*='company-name'], "
+                    "div[class*='job-card-container__primary-description'], "
+                    "span[class*='topcard__flavor'], "
+                    "a[data-tracking-control-name='public_jobs_topcard-org-name']"
+                )
+                if company_el:
+                    company = (await company_el.inner_text()).strip()
+
+                # Fallback: try to get company from the card itself
+                if company == "Unknown":
+                    card_subtitle = await card.query_selector(
+                        "span[class*='subtitle'], "
+                        "div[class*='artdeco-entity-lockup__subtitle'], "
+                        "span[class*='job-card-container__primary-description']"
+                    )
+                    if card_subtitle:
+                        company = (await card_subtitle.inner_text()).strip().split("\n")[0]
+
+                # Extract description from the right panel
+                description = ""
+                for selector in _RIGHT_PANEL_DESCRIPTION_SELECTORS:
+                    try:
+                        el = await page.query_selector(selector)
+                        if el:
+                            text = await el.inner_text()
+                            if text and len(text.strip()) > 50:
+                                description = text.strip()
+                                break
+                    except Exception:
+                        continue
+
+                if not description:
+                    logger.warning("discovery_no_description", job_id=job_id)
+                    continue
+
+                all_discovered.append(DiscoveredJob(
+                    job_id=job_id,
+                    title=title,
+                    company=company,
+                    description=description,
+                    linkedin_url=f"https://www.linkedin.com/jobs/view/{job_id}",
+                ))
+
+                logger.info(
+                    "discovery_job_extracted",
+                    job_id=job_id,
+                    title=title,
+                    company=company,
+                    desc_len=len(description),
+                )
+
+            except Exception as exc:
+                logger.warning("discovery_card_error", error=str(exc))
+                continue
+
+        # Paginate
+        if page_num < max_pages:
+            has_next = await _go_to_next_page(page)
+            if not has_next:
+                logger.info("pagination_ended", last_page=page_num)
+                break
+
+    # Filter out jobs already in the DB (by job ID)
+    if all_discovered:
+        all_ids = {j.job_id for j in all_discovered}
+        result = await session.execute(select(JobRecord.id).where(JobRecord.id.in_(all_ids)))
+        existing_ids: set[str] = set(result.scalars().all())
+        all_discovered = [j for j in all_discovered if j.job_id not in existing_ids]
+
+    # Deduplicate by company + title (same role posted in multiple locations)
+    # Also check against existing DB records to avoid re-scoring known roles
+    if all_discovered:
+        # Check DB for existing company+title combos
+        existing_records = await session.execute(
+            select(JobRecord.company, JobRecord.job_title)
+        )
+        existing_combos: set[str] = {
+            f"{row.company}|{row.job_title}".lower()
+            for row in existing_records.all()
+        }
+
+        # Deduplicate within the current batch and against DB
+        seen_combos: set[str] = set()
+        deduplicated: list[DiscoveredJob] = []
+        for job in all_discovered:
+            combo_key = f"{job.company}|{job.title}".lower()
+            if combo_key in existing_combos or combo_key in seen_combos:
+                logger.info(
+                    "discovery_duplicate_skipped",
+                    job_id=job.job_id,
+                    title=job.title,
+                    company=job.company,
+                )
+                continue
+            seen_combos.add(combo_key)
+            deduplicated.append(job)
+
+        skipped_dupes = len(all_discovered) - len(deduplicated)
+        if skipped_dupes > 0:
+            logger.info("discovery_duplicates_removed", count=skipped_dupes)
+        all_discovered = deduplicated
+
+    logger.info(
+        "job_discovery_completed",
+        total_found=len(seen_ids),
+        new_with_descriptions=len(all_discovered),
+    )
+
+    return all_discovered
 
 
 async def _extract_job_ids_from_page(page: Page) -> set[str]:
@@ -176,8 +399,23 @@ async def discover_jobs(
     search_url = build_search_url(config)
     logger.info("job_discovery_started", search_url=search_url, max_pages=max_pages)
 
-    await page.goto(search_url)
-    await page.wait_for_load_state("networkidle")
+    await page.goto(search_url, timeout=60000)
+    try:
+        await page.wait_for_load_state("networkidle", timeout=60000)
+    except Exception:
+        # Take a screenshot for debugging if the page doesn't settle
+        try:
+            await page.screenshot(path="data/debug_linkedin_page.png")
+            page_title = await page.title()
+            current_url = page.url
+            logger.warning(
+                "job_discovery_page_load_slow",
+                title=page_title,
+                url=current_url,
+                screenshot="data/debug_linkedin_page.png",
+            )
+        except Exception as ss_exc:
+            logger.warning("job_discovery_screenshot_failed", error=str(ss_exc))
 
     all_job_ids: set[str] = set()
 
@@ -229,6 +467,9 @@ _DESCRIPTION_SELECTORS: list[str] = [
     "div#job-details",
     "div.description__text",
     "section.show-more-less-html",
+    "div.jobs-box__html-content",
+    "div[class*='description']",
+    "article[class*='jobs-description']",
 ]
 
 
@@ -263,16 +504,42 @@ async def extract_description(page: Page, job_record: JobRecord) -> str:
                 url=url,
             )
 
-            await page.goto(url, wait_until="domcontentloaded")
-            await page.wait_for_load_state("networkidle")
+            await page.goto(url, wait_until="domcontentloaded", timeout=60000)
 
-            # Try each selector in order until one matches
+            # Give the page a moment to render dynamic content
+            await page.wait_for_timeout(3000)
+
+            # Wait for the description to render
             description_text: str | None = None
             for selector in _DESCRIPTION_SELECTORS:
-                element = await page.query_selector(selector)
-                if element is not None:
-                    description_text = await element.inner_text()
-                    break
+                try:
+                    element = await page.query_selector(selector)
+                    if element is not None:
+                        text = await element.inner_text()
+                        if text and len(text.strip()) > 50:
+                            description_text = text
+                            logger.debug("extraction_selector_matched", selector=selector)
+                            break
+                except Exception:
+                    continue
+
+            # Fallback: try to find any element with substantial text content
+            if not description_text:
+                logger.debug("extraction_trying_fallback", job_id=job_id)
+                # Take a screenshot for debugging
+                await page.screenshot(path=f"data/debug_extraction_{job_id}.png")
+                # Try broader selectors
+                for fallback_sel in ["main", "article", "[role='main']"]:
+                    try:
+                        el = await page.query_selector(fallback_sel)
+                        if el:
+                            text = await el.inner_text()
+                            if text and len(text.strip()) > 200:
+                                description_text = text
+                                logger.debug("extraction_fallback_matched", selector=fallback_sel)
+                                break
+                    except Exception:
+                        continue
 
             if not description_text or not description_text.strip():
                 raise ValueError("Job description element not found or empty")

@@ -94,12 +94,14 @@ class Settings(BaseModel):
     prevent credential leakage. Gmail authentication uses OAuth2 (token stored
     on disk), so no password field is needed.
 
+    The pipeline schedule is fixed at Mon-Fri 8AM-8PM Eastern and is not
+    configurable.
+
     Attributes:
         claude_api_key: Anthropic API key for Claude access.
         gmail_user: Gmail/Workspace account used for SMS gateway sending.
         sms_gateway: Carrier email-to-SMS gateway address.
         gdocs_script_url: Deployed Google Apps Script web app URL.
-        scheduled_time: Daily run time in HH:MM format.
         good_fit_threshold: Minimum score for automatic application (default 75).
         stretch_threshold: Minimum score for human review (default 50).
         backup_dir: Local directory path for daily DB backups.
@@ -113,7 +115,6 @@ class Settings(BaseModel):
     gmail_user: str | None = None
     sms_gateway: str | None = None
     gdocs_script_url: str | None = None
-    scheduled_time: str | None = None
     good_fit_threshold: int = 75
     stretch_threshold: int = 50
     backup_dir: str | None = None
@@ -376,7 +377,6 @@ class SettingsUpdate(BaseModel):
         gmail_user: Gmail/Workspace account used for SMS gateway sending.
         sms_gateway: Carrier email-to-SMS gateway address.
         gdocs_script_url: Deployed Google Apps Script web app URL.
-        scheduled_time: Daily run time in HH:MM format.
         good_fit_threshold: Minimum score for automatic application.
         stretch_threshold: Minimum score for human review.
         backup_dir: Local directory path for daily DB backups.
@@ -389,7 +389,6 @@ class SettingsUpdate(BaseModel):
     gmail_user: str | None = None
     sms_gateway: str | None = None
     gdocs_script_url: str | None = None
-    scheduled_time: str | None = None
     good_fit_threshold: int | None = None
     stretch_threshold: int | None = None
     backup_dir: str | None = None

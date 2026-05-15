@@ -10,6 +10,7 @@ Validates: Requirements 12.4, 12.5, 10.6
 
 from __future__ import annotations
 
+import os
 import secrets
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
@@ -19,7 +20,9 @@ from fastapi import FastAPI
 
 from src.api.config_routes import router as config_router
 from src.api.job_routes import router as job_router
+from src.api.log_routes import router as log_router
 from src.api.queue_routes import router as queue_router
+from src.api.session_routes import router as session_router
 from src.api.system_routes import router as system_router
 from src.db.config_repo import get_config, set_config
 from src.db.database import build_engine, get_session, init_db
@@ -63,6 +66,43 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             logger.info("api_token_loaded", token=api_token)
         break
 
+    # Seed settings from environment variables if not already configured
+    async for session in get_session():
+        existing_settings = await get_config(session, "settings")
+        if existing_settings is None:
+            existing_settings = {}
+
+        # Map env vars to settings keys
+        env_mapping = {
+            "claude_api_key": os.environ.get("CLAUDE_API_KEY", ""),
+            "gmail_user": os.environ.get("GMAIL_USER", ""),
+            "gdocs_script_url": os.environ.get("GOOGLE_APPS_SCRIPT_URL", ""),
+            "sms_gateway": os.environ.get("SMS_GATEWAY", ""),
+        }
+
+        updated = False
+        for key, env_value in env_mapping.items():
+            if env_value and not existing_settings.get(key):
+                existing_settings[key] = env_value
+                updated = True
+
+        # Set defaults for numeric fields if missing
+        if "good_fit_threshold" not in existing_settings:
+            existing_settings["good_fit_threshold"] = 75
+            updated = True
+        if "stretch_threshold" not in existing_settings:
+            existing_settings["stretch_threshold"] = 50
+            updated = True
+        if "dry_run" not in existing_settings:
+            existing_settings["dry_run"] = False
+            updated = True
+
+        if updated:
+            await set_config(session, "settings", existing_settings)
+            await session.commit()
+            logger.info("settings_seeded_from_env", keys=list(env_mapping.keys()))
+        break
+
     # Determine scheduled time from settings (if configured)
     async for session in get_session():
         settings = await get_config(session, "settings")
@@ -103,7 +143,9 @@ app = FastAPI(
 app.include_router(system_router)
 app.include_router(config_router)
 app.include_router(job_router)
+app.include_router(log_router)
 app.include_router(queue_router)
+app.include_router(session_router)
 
 
 if __name__ == "__main__":
@@ -111,7 +153,7 @@ if __name__ == "__main__":
 
     uvicorn.run(
         "src.main:app",
-        host="127.0.0.1",
+        host="0.0.0.0",
         port=7432,
         log_level="info",
     )
