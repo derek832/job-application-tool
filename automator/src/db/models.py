@@ -101,6 +101,7 @@ class JobRecord(Base):
     fit_rationale: Mapped[str | None] = mapped_column(Text, nullable=True)
     description_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     resume_snapshot: Mapped[str | None] = mapped_column(Text, nullable=True)
+    tailored_resume_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     tailored_resume_pdf: Mapped[str | None] = mapped_column(Text, nullable=True)
     cover_letter_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)

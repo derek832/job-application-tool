@@ -73,9 +73,9 @@ async def run_tailoring(
     job_record.resume_snapshot = json.dumps(resume_base)
     await session.flush()
 
-    # Step 3: Invoke Claude for tailoring
+    # Step 3: Invoke Claude for tailoring (returns JSON replacements)
     try:
-        tailored_content = await claude_client.tailor_resume(
+        tailoring_response = await claude_client.tailor_resume(
             description=job_record.description_text,
             resume_base=resume_base,
             supplementary_context=supplementary_context,
@@ -84,17 +84,32 @@ async def run_tailoring(
         await _handle_tailoring_failure(exc.message, job_record, session, sms_settings)
         return
 
-    # Step 4: Write tailored content to Google Docs
+    # Parse the replacements JSON from Claude
     try:
-        await gdocs_client.write_resume(tailored_content)
-    except GDocsError as exc:
-        await _handle_gdocs_error(exc, job_record, session, sms_settings)
+        cleaned = claude_client._extract_json(tailoring_response)
+        replacements = json.loads(cleaned)
+        if not isinstance(replacements, list):
+            raise ValueError("Expected a JSON array of replacements")
+    except (json.JSONDecodeError, ValueError) as exc:
+        await _handle_tailoring_failure(
+            f"Failed to parse tailoring replacements: {exc}", job_record, session, sms_settings
+        )
         return
 
-    # Step 5: Export PDF
+    # Store the replacements for review
+    job_record.tailored_resume_text = json.dumps(replacements, indent=2)
+    await session.flush()
+
+    # Step 4+5: Copy original doc, apply replacements, export PDF (preserves formatting)
     pdf_path = f"{PDF_OUTPUT_DIR}/{job_id}.pdf"
     try:
-        await gdocs_client.export_pdf(Path(pdf_path))
+        applied = await gdocs_client.tailor_and_export(replacements, Path(pdf_path))
+        logger.info(
+            "tailoring_replacements_applied",
+            job_id=job_id,
+            total_replacements=len(replacements),
+            applied=applied,
+        )
     except GDocsError as exc:
         await _handle_gdocs_error(exc, job_record, session, sms_settings)
         return

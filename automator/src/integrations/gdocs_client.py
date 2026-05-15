@@ -56,9 +56,57 @@ class GDocsClient:
         Raises:
             GDocsError: If the request fails after all retries or authorization expires.
         """
-        response_data = await self._request({"action": "write", "content": content})
+        response_data = await self._request({"action": "write_and_export", "content": content})
         if not response_data.get("success"):
             raise GDocsError("Write action did not return success confirmation")
+
+    async def tailor_and_export(self, replacements: list[dict[str, str]], dest_path: Path) -> int:
+        """Copy the original resume, apply text replacements, export PDF, delete copy.
+
+        Preserves all document formatting (fonts, bullets, headings, alignment)
+        while applying targeted ATS keyword replacements.
+
+        Args:
+            replacements: List of {find, replace} dicts with exact text matches.
+            dest_path: Local file path where the PDF will be written.
+
+        Returns:
+            Number of replacements successfully applied.
+
+        Raises:
+            GDocsError: If the request fails after all retries or authorization expires.
+        """
+        response_data = await self._request(
+            {
+                "action": "tailor_and_export",
+                "replacements": replacements,
+            }
+        )
+
+        if not response_data.get("success"):
+            error = response_data.get("error", "Unknown error")
+            raise GDocsError(f"Tailor and export failed: {error}")
+
+        pdf_base64 = response_data.get("pdf")
+        if pdf_base64 is None:
+            raise GDocsError("Response missing 'pdf' field from tailor_and_export action")
+
+        try:
+            pdf_bytes = base64.b64decode(pdf_base64)
+        except Exception as exc:
+            raise GDocsError(f"Failed to decode base64 PDF data: {exc}") from exc
+
+        dest_path.parent.mkdir(parents=True, exist_ok=True)
+        dest_path.write_bytes(pdf_bytes)
+
+        applied = response_data.get("replacements_applied", 0)
+        logger.info(
+            "tailored_pdf_exported",
+            dest_path=str(dest_path),
+            size_bytes=len(pdf_bytes),
+            replacements_applied=applied,
+        )
+        return applied
 
     async def export_pdf(self, dest_path: Path) -> None:
         """Export the resume document as a PDF and save it locally.

@@ -144,7 +144,11 @@ class ClaudeClient:
         resume_base: str,
         supplementary_context: str | None = None,
     ) -> str:
-        """Generate an ATS-optimized tailored resume.
+        """Generate ATS-optimized text replacements for the resume.
+
+        Returns a JSON array of {find, replace} pairs that can be applied
+        to the original formatted document to optimize it for ATS without
+        destroying the document's formatting/structure.
 
         Args:
             description: Full job description text.
@@ -153,34 +157,43 @@ class ClaudeClient:
                 for richer keyword matching. Not included in the output resume.
 
         Returns:
-            The tailored resume text optimized for ATS keywords.
+            A JSON string containing an array of {find, replace} objects.
 
         Raises:
             TailoringError: If the API call fails after all retries.
         """
         system_prompt = (
             "You are an expert resume writer specializing in ATS optimization. "
-            "Preserve all factual content from the original resume. "
-            "Do NOT fabricate experience, skills, or credentials."
+            "You optimize resumes by providing targeted text replacements that "
+            "incorporate keywords from job descriptions. You NEVER fabricate "
+            "experience, skills, or credentials. You only rephrase existing "
+            "content to better match ATS keyword scanning."
         )
 
         context_section = ""
         if supplementary_context:
             context_section = (
-                "\n\n## Additional Candidate Context (for keyword matching only — "
-                "do NOT include this text in the output resume)\n"
+                "\n\n## Additional Candidate Context (use this to inform keyword "
+                "choices, but do NOT add content that isn't already in the resume)\n"
                 f"{supplementary_context}\n"
             )
 
         user_prompt = (
             "## Job Description\n"
             f"{description}\n\n"
-            "## Original Resume\n"
+            "## Original Resume (plain text)\n"
             f"{resume_base}\n"
             f"{context_section}\n"
-            "Rewrite this resume to be ATS-optimized for the job description above. "
-            "Incorporate relevant keywords from the job description while preserving "
-            "all factual content. Return only the tailored resume text, no commentary."
+            "Analyze the job description and provide targeted text replacements to "
+            "optimize this resume for ATS keyword matching. Rules:\n"
+            "- Each replacement must be an EXACT substring from the original resume\n"
+            "- Replace with ATS-optimized phrasing that incorporates job description keywords\n"
+            "- Preserve the meaning and factual accuracy of each bullet point\n"
+            "- Focus on: skill terms, action verbs, technical keywords, and industry phrases\n"
+            "- Do NOT change the person's name, contact info, dates, or company names\n"
+            "- Aim for 5-15 targeted replacements (quality over quantity)\n\n"
+            "Respond with ONLY a valid JSON array of objects, no commentary:\n"
+            '[{"find": "exact text from resume", "replace": "optimized text"}]\n'
         )
 
         return await self._call_with_retry(

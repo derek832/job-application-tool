@@ -83,6 +83,15 @@ async def run_pipeline(session: AsyncSession | None = None) -> None:
         logger.info("pipeline_aborted_system_paused")
         return
 
+    # Check for skip_discovery flag (debug mode — skips discovery and scoring)
+    skip_discovery = bool(system_state and system_state.get("skip_discovery"))
+    if skip_discovery:
+        logger.info("pipeline_skip_discovery_mode_enabled")
+        # Clear the flag so subsequent scheduled runs don't skip
+        system_state["skip_discovery"] = False
+        await set_config(session, "system_state", system_state)
+        await session.flush()
+
     # Step 2: Check goals_profile is configured
     goals_profile_raw = await get_config(session, "goals_profile")
     if not goals_profile_raw:
@@ -160,132 +169,137 @@ async def run_pipeline(session: AsyncSession | None = None) -> None:
 
         page = await browser_context.new_page()
 
-        # Step 5+6+7: Discover jobs and extract descriptions in one pass
-        # Runs each configured search query separately and aggregates results
-        keyword_list = search_config.get_keyword_list()
-        if not keyword_list:
-            logger.warning("pipeline_no_search_queries_configured")
-            keyword_list = [""]  # Run once with no keywords as fallback
+        if not skip_discovery:
+            # Step 5+6+7: Discover jobs and extract descriptions in one pass
+            # Runs each configured search query separately and aggregates results
+            keyword_list = search_config.get_keyword_list()
+            if not keyword_list:
+                logger.warning("pipeline_no_search_queries_configured")
+                keyword_list = [""]  # Run once with no keywords as fallback
 
-        discovered: list = []
-        for i, query_keywords in enumerate(keyword_list):
-            # Randomized delay between queries to avoid detection
-            if i > 0:
-                delay = random.uniform(10.0, 20.0)
-                logger.info("pipeline_inter_query_delay", delay_seconds=round(delay, 1))
-                await asyncio.sleep(delay)
+            discovered: list = []
+            for i, query_keywords in enumerate(keyword_list):
+                # Randomized delay between queries to avoid detection
+                if i > 0:
+                    delay = random.uniform(10.0, 20.0)
+                    logger.info("pipeline_inter_query_delay", delay_seconds=round(delay, 1))
+                    await asyncio.sleep(delay)
 
-            # Build a per-query config with the current keywords
-            query_config = SearchConfig(
-                keywords=query_keywords or None,
-                location=search_config.location,
-                job_type=search_config.job_type,
-                experience_level=search_config.experience_level,
-                remote_pref=search_config.remote_pref,
-            )
-            logger.info("pipeline_running_search_query", keywords=query_keywords)
-
-            query_results = await discover_and_extract_jobs(
-                page=page,
-                config=query_config,
-                session=session,
-                max_pages=5,
-            )
-            discovered.extend(query_results)
-            logger.info(
-                "pipeline_query_completed",
-                keywords=query_keywords,
-                jobs_found=len(query_results),
-            )
-
-        # Limit to 5 jobs in dry run mode to control costs
-        if settings.dry_run and len(discovered) > 5:
-            discovered = discovered[:5]
-            logger.info("pipeline_dry_run_limited", total_found=len(discovered), limit=5)
-
-        logger.info("pipeline_discovery_completed", new_jobs=len(discovered))
-
-        # Create JobRecords with title, company, and description already populated
-        for job in discovered:
-            try:
-                await create_job_record(
-                    session,
-                    id=job.job_id,
-                    job_title=job.title,
-                    company=job.company,
-                    linkedin_url=job.linkedin_url,
-                    apply_type="easy_apply",
+                # Build a per-query config with the current keywords
+                query_config = SearchConfig(
+                    keywords=query_keywords or None,
+                    location=search_config.location,
+                    job_type=search_config.job_type,
+                    experience_level=search_config.experience_level,
+                    remote_pref=search_config.remote_pref,
                 )
-                # Update the record with the extracted description
-                from src.db.job_repo import update_job_status
+                logger.info("pipeline_running_search_query", keywords=query_keywords)
 
-                result = await session.execute(select(JobRecord).where(JobRecord.id == job.job_id))
-                record = result.scalar_one_or_none()
-                if record:
-                    record.description_text = job.description
-                    record.status = "extracted"
-                    record.extracted_at = datetime.now(UTC).isoformat()
-
+                query_results = await discover_and_extract_jobs(
+                    page=page,
+                    config=query_config,
+                    session=session,
+                    max_pages=5,
+                )
+                discovered.extend(query_results)
                 logger.info(
-                    "pipeline_job_discovered_and_extracted",
-                    job_id=job.job_id,
-                    title=job.title,
-                    company=job.company,
-                )
-            except Exception as exc:
-                logger.error(
-                    "pipeline_job_record_creation_failed",
-                    job_id=job.job_id,
-                    error=str(exc),
+                    "pipeline_query_completed",
+                    keywords=query_keywords,
+                    jobs_found=len(query_results),
                 )
 
-        await session.flush()
+            # Limit to 5 jobs in dry run mode to control costs
+            if settings.dry_run and len(discovered) > 5:
+                discovered = discovered[:5]
+                logger.info("pipeline_dry_run_limited", total_found=len(discovered), limit=5)
 
-        # Step 8: Run scoring for jobs in "extracted" status
-        if claude_client:
-            extracted_jobs = await _get_jobs_by_status(session, "extracted")
-            resume_content = await _load_resume_content(gdocs_client)
+            logger.info("pipeline_discovery_completed", new_jobs=len(discovered))
 
-            # Append supplementary context (work notes, detailed experience) so
-            # Claude has richer context for scoring and tailoring without polluting
-            # the actual resume used for PDF export.
-            if goals_profile.supplementary_context:
-                resume_content = (
-                    f"{resume_content}\n\n"
-                    f"## Additional Context (not part of resume)\n"
-                    f"{goals_profile.supplementary_context}"
-                )
-
-            goals_json = goals_profile.model_dump_json()
-
-            for job_record in extracted_jobs:
+            # Create JobRecords with title, company, and description already populated
+            for job in discovered:
                 try:
-                    await run_scoring(
-                        job_record=job_record,
-                        session=session,
-                        claude_client=claude_client,
-                        resume_content=resume_content,
-                        goals_profile=goals_json,
-                        deal_breakers=goals_profile.deal_breakers,
-                        good_fit_threshold=settings.good_fit_threshold,
-                        stretch_threshold=settings.stretch_threshold,
-                        sms_settings=sms_settings,
+                    await create_job_record(
+                        session,
+                        id=job.job_id,
+                        job_title=job.title,
+                        company=job.company,
+                        linkedin_url=job.linkedin_url,
+                        apply_type="easy_apply",
                     )
+                    # Update the record with the extracted description
+                    from src.db.job_repo import update_job_status
+
+                    result = await session.execute(
+                        select(JobRecord).where(JobRecord.id == job.job_id)
+                    )
+                    record = result.scalar_one_or_none()
+                    if record:
+                        record.description_text = job.description
+                        record.status = "extracted"
+                        record.extracted_at = datetime.now(UTC).isoformat()
+
                     logger.info(
-                        "pipeline_scoring_completed",
-                        job_id=job_record.id,
-                        new_status=job_record.status,
+                        "pipeline_job_discovered_and_extracted",
+                        job_id=job.job_id,
+                        title=job.title,
+                        company=job.company,
                     )
                 except Exception as exc:
                     logger.error(
-                        "pipeline_scoring_error",
-                        job_id=job_record.id,
+                        "pipeline_job_record_creation_failed",
+                        job_id=job.job_id,
                         error=str(exc),
                     )
-        else:
-            logger.warning("pipeline_scoring_skipped_no_claude_client")
 
-        await session.flush()
+            await session.flush()
+
+            # Step 8: Run scoring for jobs in "extracted" status
+            if claude_client:
+                extracted_jobs = await _get_jobs_by_status(session, "extracted")
+                resume_content = await _load_resume_content(gdocs_client)
+
+                # Append supplementary context (work notes, detailed experience) so
+                # Claude has richer context for scoring and tailoring without polluting
+                # the actual resume used for PDF export.
+                if goals_profile.supplementary_context:
+                    resume_content = (
+                        f"{resume_content}\n\n"
+                        f"## Additional Context (not part of resume)\n"
+                        f"{goals_profile.supplementary_context}"
+                    )
+
+                goals_json = goals_profile.model_dump_json()
+
+                for job_record in extracted_jobs:
+                    try:
+                        await run_scoring(
+                            job_record=job_record,
+                            session=session,
+                            claude_client=claude_client,
+                            resume_content=resume_content,
+                            goals_profile=goals_json,
+                            deal_breakers=goals_profile.deal_breakers,
+                            good_fit_threshold=settings.good_fit_threshold,
+                            stretch_threshold=settings.stretch_threshold,
+                            sms_settings=sms_settings,
+                        )
+                        logger.info(
+                            "pipeline_scoring_completed",
+                            job_id=job_record.id,
+                            new_status=job_record.status,
+                        )
+                    except Exception as exc:
+                        logger.error(
+                            "pipeline_scoring_error",
+                            job_id=job_record.id,
+                            error=str(exc),
+                        )
+            else:
+                logger.warning("pipeline_scoring_skipped_no_claude_client")
+
+            await session.flush()
+        else:
+            logger.info("pipeline_discovery_and_scoring_skipped")
 
         # Step 9: Run tailoring and application for "approved_for_apply" jobs
         if claude_client and gdocs_client:
