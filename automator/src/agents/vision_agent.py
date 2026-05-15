@@ -115,17 +115,50 @@ _LABEL_TO_PROFILE_KEY: dict[str, str] = {
     "location": "location",
     "city": "location",
     "address": "location",
+    "zip": "zip_code",
+    "zip code": "zip_code",
+    "postal code": "zip_code",
     "work authorization": "work_auth",
     "work auth": "work_auth",
     "authorized to work": "work_auth",
+    "are you authorized": "work_auth",
+    "legally authorized": "work_auth",
     "linkedin": "linkedin_url",
     "linkedin url": "linkedin_url",
     "linkedin profile": "linkedin_url",
+    "website": "linkedin_url",
+    "portfolio": "linkedin_url",
+    "blog or portfolio": "linkedin_url",
+    "personal website": "linkedin_url",
     "salary": "min_salary",
     "salary expectation": "min_salary",
     "expected salary": "min_salary",
     "desired salary": "min_salary",
+    "desired pay": "min_salary",
     "minimum salary": "min_salary",
+    "compensation": "min_salary",
+    "date available": "date_available",
+    "start date": "date_available",
+    "available start date": "date_available",
+    "earliest start date": "date_available",
+    "when can you start": "date_available",
+}
+
+# Fields that are optional — if unmapped, skip them rather than escalating
+_OPTIONAL_FIELD_LABELS: set[str] = {
+    "cover letter",
+    "blog or portfolio",
+    "portfolio",
+    "personal website",
+    "website",
+    "how did you hear about us",
+    "how did you hear about this position",
+    "referral",
+    "referred by",
+    "additional information",
+    "anything else",
+    "comments",
+    "notes",
 }
 
 
@@ -133,7 +166,7 @@ def map_fields_to_profile(
     fields: list[FormField],
     profile: UserProfile,
     min_salary: int | None,
-) -> tuple[dict[str, str], list[FormField], bool]:
+) -> tuple[dict[str, str], list[FormField], list[FormField], bool]:
     """Map identified form fields to user profile values.
 
     Args:
@@ -144,24 +177,36 @@ def map_fields_to_profile(
     Returns:
         A tuple of:
         - mapped: dict mapping field_id to the value to fill
-        - unmapped: list of fields that could not be mapped
+        - unmapped: list of required fields that could not be mapped
+        - file_fields: list of file upload fields (resume, cover letter)
         - salary_missing: True if a salary field was found but no min_salary configured
     """
+    # Extract ZIP from location (e.g., "Norfolk, VA" → try common_answers first)
+    zip_code = profile.common_answers.get("zip_code", profile.common_answers.get("zip"))
+
     profile_values: dict[str, str | None] = {
         "full_name": profile.full_name,
         "email": profile.email,
         "phone": profile.phone,
         "location": profile.location,
+        "zip_code": zip_code,
         "work_auth": profile.work_auth,
         "linkedin_url": profile.linkedin_url,
         "min_salary": str(min_salary) if min_salary is not None else None,
+        "date_available": profile.common_answers.get("date_available", "2 weeks"),
     }
 
     mapped: dict[str, str] = {}
     unmapped: list[FormField] = []
+    file_fields: list[FormField] = []
     salary_missing = False
 
     for field in fields:
+        # File upload fields get handled separately
+        if field.field_type == "file":
+            file_fields.append(field)
+            continue
+
         # First try the suggested_value from Claude
         if field.suggested_value:
             mapped[field.field_id] = field.suggested_value
@@ -169,7 +214,13 @@ def map_fields_to_profile(
 
         # Try to match the label to a known profile key
         label_lower = field.label.lower().strip()
-        profile_key = _LABEL_TO_PROFILE_KEY.get(label_lower)
+
+        # Check if this is an optional field we can skip
+        if _is_optional_field(label_lower):
+            logger.debug("optional_field_skipped", field_id=field.field_id, label=field.label)
+            continue
+
+        profile_key = _match_label_to_key(label_lower)
 
         # Also check common_answers for custom questions
         if profile_key is None:
@@ -195,9 +246,43 @@ def map_fields_to_profile(
         if value is not None:
             mapped[field.field_id] = value
         else:
+            # If we have a key but no value, check if it's optional
+            if _is_optional_field(label_lower):
+                continue
             unmapped.append(field)
 
-    return mapped, unmapped, salary_missing
+    return mapped, unmapped, file_fields, salary_missing
+
+
+def _match_label_to_key(label_lower: str) -> str | None:
+    """Match a field label to a profile key using the mapping table.
+
+    Tries exact match first, then substring matching for longer labels.
+
+    Args:
+        label_lower: Lowercased field label.
+
+    Returns:
+        The profile key if matched, or None.
+    """
+    # Exact match
+    if label_lower in _LABEL_TO_PROFILE_KEY:
+        return _LABEL_TO_PROFILE_KEY[label_lower]
+
+    # Substring match — check if any known label is contained in the field label
+    for known_label, key in _LABEL_TO_PROFILE_KEY.items():
+        if known_label in label_lower:
+            return key
+
+    return None
+
+
+def _is_optional_field(label_lower: str) -> bool:
+    """Check if a field label indicates an optional field that can be skipped."""
+    for optional in _OPTIONAL_FIELD_LABELS:
+        if optional in label_lower:
+            return True
+    return False
 
 
 # ---------------------------------------------------------------------------
@@ -292,7 +377,9 @@ async def process_external_apply(
                 )
 
         # Map fields to profile values
-        mapped, unmapped, salary_missing = map_fields_to_profile(fields, profile, min_salary)
+        mapped, unmapped, file_fields, salary_missing = map_fields_to_profile(
+            fields, profile, min_salary
+        )
 
         # Escalate for salary missing
         if salary_missing:
@@ -303,17 +390,42 @@ async def process_external_apply(
                 reason="salary_missing",
             )
 
-        # Escalate for unrecognized fields
-        if unmapped:
+        # Escalate for unrecognized required fields (more than 2 unmapped = likely a problem)
+        if len(unmapped) > 2:
             unmapped_labels = [f.label for f in unmapped]
-            log.warning("unrecognized_fields", fields=unmapped_labels)
+            log.warning("too_many_unrecognized_fields", fields=unmapped_labels)
             return Result(
                 ok=False,
-                error=f"Unrecognized fields: {', '.join(unmapped_labels)}",
+                error=f"Too many unrecognized fields: {', '.join(unmapped_labels)}",
                 reason="unrecognized_field",
             )
+        elif unmapped:
+            # 1-2 unmapped fields — log but continue (they might be optional)
+            unmapped_labels = [f.label for f in unmapped]
+            log.info("skipping_unmapped_fields", fields=unmapped_labels)
 
-        # Fill all mapped fields
+        # Handle file upload fields (resume PDF)
+        for file_field in file_fields:
+            label_lower = file_field.label.lower()
+            if "resume" in label_lower or "cv" in label_lower:
+                if job_record.tailored_resume_pdf:
+                    try:
+                        selector = f"input[type='file'][id='{file_field.field_id}'], "
+                        selector += f"input[type='file'][name='{file_field.field_id}']"
+                        file_input = await page.query_selector(selector)
+                        if file_input is None:
+                            # Try broader file input selector
+                            file_input = await page.query_selector("input[type='file']")
+                        if file_input:
+                            await file_input.set_input_files(job_record.tailored_resume_pdf)
+                            log.info("resume_uploaded", path=job_record.tailored_resume_pdf)
+                    except Exception as exc:
+                        log.warning("resume_upload_failed", error=str(exc))
+                else:
+                    log.warning("no_tailored_pdf_for_upload")
+            # Cover letter and other file fields are optional — skip
+
+        # Fill all mapped text fields
         for field_id, value in mapped.items():
             sanitized = sanitize_value(value)
             if sanitized is None:
@@ -324,17 +436,29 @@ async def process_external_apply(
                     reason="unsafe_value",
                 )
 
+            # Find the corresponding field object to get the label
+            field_label = field_id
+            for f in fields:
+                if f.field_id == field_id:
+                    field_label = f.label
+                    break
+
             try:
-                selector = f"[id='{field_id}'], [name='{field_id}']"
-                await page.fill(selector, sanitized)
-                log.debug("field_filled", field_id=field_id)
+                # Try multiple strategies to locate the field:
+                # 1. By label text (most reliable for ATS forms)
+                filled = await _fill_by_label(page, field_label, sanitized)
+                if not filled:
+                    # 2. By id/name attribute
+                    filled = await _fill_by_selector(page, field_id, sanitized)
+                if not filled:
+                    log.warning("field_not_found", field_id=field_id, label=field_label)
+                    # Don't fail — skip unfillable fields
+                    continue
+                log.debug("field_filled", field_id=field_id, label=field_label)
             except Exception as exc:
-                log.error("fill_failed", field_id=field_id, error=str(exc))
-                return Result(
-                    ok=False,
-                    error=f"Failed to fill field {field_id}: {exc}",
-                    reason="fill_failed",
-                )
+                log.warning("fill_failed", field_id=field_id, label=field_label, error=str(exc))
+                # Don't fail on individual field errors — continue with others
+                continue
 
         # Check if there's a "Next" button (multi-page form)
         next_button = await page.query_selector(
@@ -379,6 +503,68 @@ async def process_external_apply(
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+async def _fill_by_label(page: Page, label: str, value: str) -> bool:
+    """Try to fill a form field by finding it via its label text.
+
+    Uses Playwright's label-based locator which handles both <label for="...">
+    and labels wrapping inputs.
+
+    Args:
+        page: The Playwright page.
+        label: The visible label text for the field.
+        value: The value to fill.
+
+    Returns:
+        True if the field was found and filled.
+    """
+    try:
+        locator = page.get_by_label(label, exact=False)
+        if await locator.count() > 0:
+            await locator.first.fill(value, timeout=5000)
+            return True
+    except Exception:
+        pass
+
+    # Fallback: try placeholder text
+    try:
+        locator = page.get_by_placeholder(label, exact=False)
+        if await locator.count() > 0:
+            await locator.first.fill(value, timeout=5000)
+            return True
+    except Exception:
+        pass
+
+    return False
+
+
+async def _fill_by_selector(page: Page, field_id: str, value: str) -> bool:
+    """Try to fill a form field by id or name attribute.
+
+    Args:
+        page: The Playwright page.
+        field_id: The id or name to search for.
+        value: The value to fill.
+
+    Returns:
+        True if the field was found and filled.
+    """
+    selectors = [
+        f"[id='{field_id}']",
+        f"[name='{field_id}']",
+        f"[id*='{field_id}']",
+        f"[name*='{field_id}']",
+    ]
+    for selector in selectors:
+        try:
+            el = await page.query_selector(selector)
+            if el:
+                await el.fill(value)
+                return True
+        except Exception:
+            continue
+    return False
 
 
 def _is_captcha_field(field: FormField) -> bool:
