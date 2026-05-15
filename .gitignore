@@ -1,3 +1,6 @@
+# Personal reference docs
+SKILLS_AND_CONTEXT.md
+
 # Secrets and local config
 .env
 *.db
