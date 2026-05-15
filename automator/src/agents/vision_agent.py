@@ -296,6 +296,7 @@ async def process_external_apply(
     page: Page,
     claude_client: ClaudeClient,
     min_salary: int | None = None,
+    dry_run: bool = False,
 ) -> Result:
     """Process an external job application using DOM-based form detection.
 
@@ -305,7 +306,7 @@ async def process_external_apply(
     3. For unknown fields, ask Claude (text-based, not vision) for answers
     4. Fill fields using real DOM selectors (not visual coordinates)
     5. Upload resume PDF to file inputs
-    6. Submit the form
+    6. Submit the form (unless dry_run is True)
 
     Falls back to Claude Vision only if DOM extraction finds no fields.
 
@@ -315,6 +316,7 @@ async def process_external_apply(
         page: A Playwright Page instance for browser interaction.
         claude_client: The Claude API client for field identification.
         min_salary: The user's minimum salary from GoalsProfile, or None.
+        dry_run: If True, fills the form but does not click submit.
 
     Returns:
         Result indicating success or failure with escalation reason.
@@ -443,7 +445,11 @@ async def process_external_apply(
         # No next button — look for submit
         break
 
-    # Submit the form
+    # Submit the form (or skip if dry_run)
+    if dry_run:
+        log.info("dry_run_skipping_submit", fields_filled=True)
+        return Result(ok=True)
+
     try:
         submit_button = await page.query_selector(
             "button[type='submit'], button:has-text('Submit'), "
