@@ -51,7 +51,9 @@ async def notify(
             job_id=job_record.id,
             trigger_reason=trigger_reason,
         )
-        sms_body = compose_sms(job_record.job_title, job_record.company, trigger_reason)
+        sms_body = compose_sms(
+            job_record.job_title, job_record.company, trigger_reason, job_record.fit_score
+        )
         log_entry = NotificationLog(
             job_id=job_record.id,
             trigger_reason=trigger_reason,
@@ -65,7 +67,9 @@ async def notify(
         return
 
     # Step 2: Compose the SMS message
-    sms_body = compose_sms(job_record.job_title, job_record.company, trigger_reason)
+    sms_body = compose_sms(
+        job_record.job_title, job_record.company, trigger_reason, job_record.fit_score
+    )
 
     # Step 3: Attempt delivery
     result = await send_sms(sms_body, sms_settings)

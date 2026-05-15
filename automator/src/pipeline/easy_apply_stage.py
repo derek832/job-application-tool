@@ -657,7 +657,9 @@ async def _send_notification(
         trigger_reason: The reason for the notification.
         sms_settings: SMS gateway settings. If None, notification is logged but not sent.
     """
-    sms_body = compose_sms(job_record.job_title, job_record.company, trigger_reason)
+    sms_body = compose_sms(
+        job_record.job_title, job_record.company, trigger_reason, job_record.fit_score
+    )
     now_iso = datetime.now(UTC).isoformat()
 
     if sms_settings is None:
