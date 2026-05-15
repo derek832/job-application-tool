@@ -20,6 +20,7 @@ from src.db.config_repo import get_config, set_config
 from src.db.database import get_session
 from src.db.job_repo import get_queue_items, get_stats
 from src.integrations.gmail_oauth import load_credentials
+from src.scheduler.scheduler import trigger_now as scheduler_trigger_now
 
 logger = structlog.get_logger(__name__)
 
@@ -121,6 +122,10 @@ async def trigger_run(
     system_state_data = await get_config(session, "system_state") or {}
     system_state_data["status"] = "running"
     await set_config(session, "system_state", system_state_data)
+    await session.commit()
+
+    # Actually trigger the pipeline via the scheduler
+    scheduler_trigger_now()
 
     stats_data = await get_stats(session)
     stats = StatsOut(**stats_data)

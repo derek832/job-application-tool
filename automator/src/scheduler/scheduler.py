@@ -9,6 +9,7 @@ APScheduler's AsyncIOScheduler.
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
+from zoneinfo import ZoneInfo
 
 import structlog
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -22,6 +23,8 @@ if TYPE_CHECKING:
 logger = structlog.get_logger(__name__)
 
 _scheduler: AsyncIOScheduler | None = None
+
+EASTERN_TZ = ZoneInfo("America/New_York")
 
 
 async def _run_pipeline_wrapper() -> None:
@@ -42,42 +45,42 @@ async def _run_pipeline_wrapper() -> None:
 def setup_scheduler(app: FastAPI, scheduled_time: str | None = None) -> AsyncIOScheduler:
     """Create, configure, and start the APScheduler instance.
 
-    Registers a weekday cron job (Monday–Friday) at the configured time that
-    triggers the job pipeline. Also registers the daily database backup job.
-    The scheduler instance is stored on ``app.state.scheduler`` for access
-    from route handlers.
+    Registers a weekday cron job (Monday–Friday) that triggers the job pipeline
+    hourly from 8 AM to 8 PM Eastern time. Also registers the daily database
+    backup job. The scheduler instance is stored on ``app.state.scheduler`` for
+    access from route handlers.
 
     Args:
         app: The FastAPI application instance. The scheduler is attached to
             ``app.state.scheduler``.
-        scheduled_time: Time in "HH:MM" format for the weekday cron job.
-            Defaults to "09:00" if not provided or None.
+        scheduled_time: Unused, retained for API compatibility. The schedule is
+            fixed to hourly 8 AM–8 PM Eastern on weekdays.
 
     Returns:
         The configured and started AsyncIOScheduler instance.
     """
     global _scheduler  # noqa: PLW0603
 
-    if scheduled_time is None:
-        scheduled_time = "09:00"
+    scheduler = AsyncIOScheduler(timezone=EASTERN_TZ)
 
-    hour, minute = _parse_time(scheduled_time)
-
-    scheduler = AsyncIOScheduler()
-
-    # Register the weekday pipeline cron job (Mon-Fri)
+    # Register the weekday pipeline cron job (Mon-Fri, hourly 8 AM - 8 PM Eastern)
     scheduler.add_job(
         _run_pipeline_wrapper,
-        trigger=CronTrigger(day_of_week="mon-fri", hour=hour, minute=minute),
+        trigger=CronTrigger(
+            day_of_week="mon-fri",
+            hour="8-20",
+            minute=0,
+            timezone=EASTERN_TZ,
+        ),
         id="weekday_pipeline_run",
-        name="Weekday Job Pipeline Run",
+        name="Weekday Hourly Job Pipeline Run (8AM-8PM ET)",
         replace_existing=True,
     )
 
     logger.info(
         "pipeline_cron_registered",
         job_id="weekday_pipeline_run",
-        schedule=f"mon-fri at {hour:02d}:{minute:02d}",
+        schedule="mon-fri hourly 08:00-20:00 America/New_York",
     )
 
     # Register the daily backup job
@@ -118,28 +121,4 @@ def trigger_now() -> None:
     logger.info("manual_pipeline_run_triggered")
 
 
-def _parse_time(time_str: str) -> tuple[int, int]:
-    """Parse a time string in HH:MM format into hour and minute integers.
 
-    Args:
-        time_str: Time string in "HH:MM" format (e.g., "09:00", "14:30").
-
-    Returns:
-        A tuple of (hour, minute) as integers.
-
-    Raises:
-        ValueError: If the time string is not in valid HH:MM format.
-    """
-    parts = time_str.strip().split(":")
-    if len(parts) != 2:
-        raise ValueError(f"Invalid time format '{time_str}', expected HH:MM")
-
-    hour = int(parts[0])
-    minute = int(parts[1])
-
-    if not (0 <= hour <= 23):
-        raise ValueError(f"Hour must be 0-23, got {hour}")
-    if not (0 <= minute <= 59):
-        raise ValueError(f"Minute must be 0-59, got {minute}")
-
-    return hour, minute

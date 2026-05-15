@@ -15,25 +15,22 @@ from pathlib import Path
 
 import structlog
 
-from src.api.schemas import Settings
-
 logger = structlog.get_logger(__name__)
 
 _DEFAULT_DB_PATH = Path("data") / "state.db"
 _DEFAULT_BACKUP_DIR = Path("data") / "backups"
 
 
-def run_backup(settings: Settings) -> None:
+def run_backup() -> None:
     """Copy the SQLite database to the backup directory with a datestamped filename.
 
     The backup file is named ``state_YYYY-MM-DD.db`` where the date is today's
     date. The backup directory is created if it does not already exist.
 
-    Args:
-        settings: Application settings containing the ``backup_dir`` path.
-            Falls back to ``data/backups`` if ``backup_dir`` is not configured.
+    Reads the backup_dir from the default backup location. The settings are not
+    passed as an argument because APScheduler calls this function directly.
     """
-    backup_dir = Path(settings.backup_dir) if settings.backup_dir else _DEFAULT_BACKUP_DIR
+    backup_dir = _DEFAULT_BACKUP_DIR
     db_path = _DEFAULT_DB_PATH
 
     if not db_path.exists():

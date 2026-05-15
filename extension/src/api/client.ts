@@ -7,6 +7,7 @@
  */
 
 import { z } from "zod";
+import { loadToken } from "./token-storage";
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -130,7 +131,6 @@ export const SettingsSchema = z.object({
   gmail_user: z.string().nullable(),
   sms_gateway: z.string().nullable(),
   gdocs_script_url: z.string().nullable(),
-  scheduled_time: z.string().nullable(),
   good_fit_threshold: z.number().int(),
   stretch_threshold: z.number().int(),
   backup_dir: z.string().nullable(),
@@ -156,9 +156,8 @@ export type Settings = z.infer<typeof SettingsSchema>;
 // ---------------------------------------------------------------------------
 
 async function getToken(): Promise<string> {
-  const result = await chrome.storage.local.get("api_token");
-  const token = result.api_token;
-  if (typeof token !== "string" || token.length === 0) {
+  const token = await loadToken();
+  if (!token) {
     throw new ApiError(0, "Unauthorized", "No API token configured in extension storage.");
   }
   return token;
@@ -362,4 +361,60 @@ export async function rejectQueueItem(id: string): Promise<void> {
 
 export async function markManuallyApplied(id: string): Promise<void> {
   return requestVoid(`/queue/${encodeURIComponent(id)}/manual`, { method: "POST" });
+}
+
+// ---------------------------------------------------------------------------
+// Session Management
+// ---------------------------------------------------------------------------
+
+export async function importLinkedInCookies(): Promise<{ imported: number; message: string }> {
+  // Get all LinkedIn cookies from multiple domain patterns
+  const [dotLinkedin, wwwLinkedin, linkedinNoDot] = await Promise.all([
+    chrome.cookies.getAll({ domain: ".linkedin.com" }),
+    chrome.cookies.getAll({ domain: "www.linkedin.com" }),
+    chrome.cookies.getAll({ domain: "linkedin.com" }),
+  ]);
+
+  // Deduplicate by name+domain+path
+  const seen = new Set<string>();
+  const cookies: chrome.cookies.Cookie[] = [];
+  for (const c of [...dotLinkedin, ...wwwLinkedin, ...linkedinNoDot]) {
+    const key = `${c.name}|${c.domain}|${c.path}`;
+    if (!seen.has(key)) {
+      seen.add(key);
+      cookies.push(c);
+    }
+  }
+
+  return request(
+    "/session/cookies",
+    z.object({ imported: z.number(), message: z.string() }),
+    {
+      method: "POST",
+      body: JSON.stringify({ cookies }),
+    }
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Activity Logs
+// ---------------------------------------------------------------------------
+
+export const LogEntrySchema = z.object({
+  job_id: z.string(),
+  from_status: z.string().nullable(),
+  to_status: z.string(),
+  reason: z.string().nullable(),
+  timestamp: z.string(),
+});
+
+export const LogsResponseSchema = z.object({
+  entries: z.array(LogEntrySchema),
+});
+
+export type LogEntry = z.infer<typeof LogEntrySchema>;
+
+export async function getActivityLog(limit: number = 50): Promise<LogEntry[]> {
+  const result = await request(`/logs/activity?limit=${limit}`, LogsResponseSchema);
+  return result.entries;
 }
