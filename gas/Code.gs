@@ -132,6 +132,9 @@ function handleWriteAndExport(content) {
  * preserve formatting while optimizing for ATS, exports as PDF, then deletes
  * the copy. The original document is never modified.
  *
+ * Uses element-level text replacement instead of body.replaceText() to avoid
+ * formatting bleed across bold/non-bold boundaries.
+ *
  * @param {Array<{find: string, replace: string}>} replacements - Text replacement pairs.
  * @returns {ContentService.TextOutput} JSON with { pdf: base64, success: true, replacements_applied: number }.
  */
@@ -155,13 +158,8 @@ function handleTailorAndExport(replacements) {
     for (var i = 0; i < replacements.length; i++) {
       var pair = replacements[i];
       if (pair.find && pair.replace) {
-        // replaceText uses regex — escape special chars in the find string
-        var escaped = pair.find.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-        var found = body.findText(escaped);
-        if (found) {
-          body.replaceText(escaped, pair.replace);
-          applied++;
-        }
+        var success = safeReplace(body, pair.find, pair.replace);
+        if (success) applied++;
       }
     }
 
@@ -185,6 +183,61 @@ function handleTailorAndExport(replacements) {
     }
     throw err;
   }
+}
+
+/**
+ * Safely replaces text within a document body without disrupting formatting.
+ * Instead of body.replaceText() which can bleed bold/italic across boundaries,
+ * this finds the text element containing the match and replaces only within
+ * that element's text, preserving all character-level formatting.
+ *
+ * @param {Body} body - The document body.
+ * @param {string} findText - Exact text to find.
+ * @param {string} replaceWith - Text to replace it with.
+ * @returns {boolean} True if a replacement was made.
+ */
+function safeReplace(body, findText, replaceWith) {
+  // Escape regex special characters for findText search
+  var escaped = findText.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  var searchResult = body.findText(escaped);
+
+  if (!searchResult) return false;
+
+  var element = searchResult.getElement();
+  var startOffset = searchResult.getStartOffset();
+  var endOffset = searchResult.getEndOffsetInclusive();
+
+  // Get the Text object
+  var textObj = element.asText();
+
+  // Delete the found text range and insert the replacement at the same position.
+  // This preserves the formatting of the surrounding text.
+  // The replacement inherits formatting from the character at startOffset.
+  // To avoid bold bleed: check if the start is bold but the content shouldn't be.
+  var isBoldAtStart = textObj.isBold(startOffset);
+  var fullText = textObj.getText();
+
+  // Build new full text with the replacement spliced in
+  var before = fullText.substring(0, startOffset);
+  var after = fullText.substring(endOffset + 1);
+  var newFullText = before + replaceWith + after;
+
+  // Set the text (this preserves formatting for unchanged portions)
+  textObj.deleteText(startOffset, endOffset);
+  textObj.insertText(startOffset, replaceWith);
+
+  // If the character BEFORE the start is not bold but start is bold,
+  // the replacement is at a boundary — keep the replacement non-bold
+  // to match the majority of the replaced content's style.
+  if (startOffset > 0) {
+    var isBoldBefore = textObj.isBold(startOffset - 1);
+    if (!isBoldBefore && isBoldAtStart) {
+      // The find text started at a bold boundary — make replacement non-bold
+      textObj.setBold(startOffset, startOffset + replaceWith.length - 1, false);
+    }
+  }
+
+  return true;
 }
 
 /**
