@@ -247,7 +247,7 @@ async def _send_notification(
         return
 
     # Send SMS
-    result = send_sms(sms_body, sms_settings)
+    result = await send_sms(sms_body, sms_settings)
 
     log_entry = NotificationLog(
         job_id=job_record.id,

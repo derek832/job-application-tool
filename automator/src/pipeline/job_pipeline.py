@@ -23,13 +23,10 @@ from src.api.schemas import GoalsProfile, SearchConfig, Settings, UserProfile
 from src.db.config_repo import get_config, set_config
 from src.db.job_repo import TERMINAL_STATUSES, create_job_record
 from src.db.models import JobRecord
-from src.exceptions import PipelineError
 from src.integrations.gdocs_client import GDocsClient
 from src.integrations.linkedin_scraper import discover_and_extract_jobs
-from src.integrations.linkedin_auth import ensure_linkedin_authenticated
 from src.integrations.sms_gateway import SMSSettings
 from src.pipeline.easy_apply_stage import run_easy_apply
-from src.pipeline.extraction_stage import run_extraction
 from src.pipeline.scoring_stage import run_scoring
 from src.pipeline.tailoring_stage import restore_resume_base, run_tailoring
 
@@ -147,7 +144,9 @@ async def run_pipeline(session: AsyncSession | None = None) -> None:
                 logger.info("pipeline_chrome_connecting_direct", url=cdp_url)
                 browser = await pw.chromium.connect_over_cdp(cdp_url)
 
-            browser_context = browser.contexts[0] if browser.contexts else await browser.new_context()
+            browser_context = (
+                browser.contexts[0] if browser.contexts else await browser.new_context()
+            )
             logger.info("pipeline_chrome_connected", contexts=len(browser.contexts))
         except Exception as exc:
             logger.error(
@@ -160,13 +159,36 @@ async def run_pipeline(session: AsyncSession | None = None) -> None:
         page = await browser_context.new_page()
 
         # Step 5+6+7: Discover jobs and extract descriptions in one pass
-        # Clicks each job card in the search results and reads the right panel
-        discovered = await discover_and_extract_jobs(
-            page=page,
-            config=search_config,
-            session=session,
-            max_pages=5,
-        )
+        # Runs each configured search query separately and aggregates results
+        keyword_list = search_config.get_keyword_list()
+        if not keyword_list:
+            logger.warning("pipeline_no_search_queries_configured")
+            keyword_list = [""]  # Run once with no keywords as fallback
+
+        discovered: list = []
+        for query_keywords in keyword_list:
+            # Build a per-query config with the current keywords
+            query_config = SearchConfig(
+                keywords=query_keywords or None,
+                location=search_config.location,
+                job_type=search_config.job_type,
+                experience_level=search_config.experience_level,
+                remote_pref=search_config.remote_pref,
+            )
+            logger.info("pipeline_running_search_query", keywords=query_keywords)
+
+            query_results = await discover_and_extract_jobs(
+                page=page,
+                config=query_config,
+                session=session,
+                max_pages=5,
+            )
+            discovered.extend(query_results)
+            logger.info(
+                "pipeline_query_completed",
+                keywords=query_keywords,
+                jobs_found=len(query_results),
+            )
 
         # Limit to 5 jobs in dry run mode to control costs
         if settings.dry_run and len(discovered) > 5:
@@ -189,9 +211,7 @@ async def run_pipeline(session: AsyncSession | None = None) -> None:
                 # Update the record with the extracted description
                 from src.db.job_repo import update_job_status
 
-                result = await session.execute(
-                    select(JobRecord).where(JobRecord.id == job.job_id)
-                )
+                result = await session.execute(select(JobRecord).where(JobRecord.id == job.job_id))
                 record = result.scalar_one_or_none()
                 if record:
                     record.description_text = job.description
@@ -205,7 +225,11 @@ async def run_pipeline(session: AsyncSession | None = None) -> None:
                     company=job.company,
                 )
             except Exception as exc:
-                logger.error("pipeline_job_record_creation_failed", job_id=job.job_id, error=str(exc))
+                logger.error(
+                    "pipeline_job_record_creation_failed",
+                    job_id=job.job_id,
+                    error=str(exc),
+                )
 
         await session.flush()
 
@@ -299,37 +323,72 @@ async def run_pipeline(session: AsyncSession | None = None) -> None:
                             goals_profile=goals_json,
                         )
                     else:
-                        # External apply via Vision Agent
-                        from src.agents.vision_agent import process_external_apply
+                        # External apply: high-match (90%+) jobs get resume tailored
+                        # and user is notified "resume is ready, go apply."
+                        # Lower-score external apply jobs use the Vision Agent.
+                        high_match_threshold = 90
 
-                        result = await process_external_apply(
-                            job_record=job_record,
-                            profile=user_profile,
-                            page=page,
-                            claude_client=claude_client,
-                            min_salary=goals_profile.min_salary,
-                        )
-                        if result.ok:
+                        if (job_record.fit_score or 0) >= high_match_threshold:
+                            # Resume is already tailored (PDF exported above).
+                            # Notify user and add to human queue for manual submission.
                             from src.db.job_repo import update_job_status
+                            from src.pipeline.notification_service import notify
 
-                            job_record.applied_at = datetime.now(UTC).isoformat()
+                            job_record.queue_reason = "resume_ready_external_apply"
                             await update_job_status(
                                 session,
                                 job_record.id,
-                                "applied",
-                                reason="External apply submitted via Vision Agent",
+                                "applying",
+                                reason="High-match external apply — resume tailored, "
+                                "awaiting manual submission",
+                            )
+
+                            if sms_settings:
+                                await notify(
+                                    session=session,
+                                    job_record=job_record,
+                                    trigger_reason="resume_ready_go_apply",
+                                    sms_settings=sms_settings,
+                                )
+
+                            logger.info(
+                                "pipeline_external_apply_resume_ready",
+                                job_id=job_record.id,
+                                fit_score=job_record.fit_score,
+                                pdf_path=job_record.tailored_resume_pdf,
                             )
                         else:
-                            from src.db.job_repo import update_job_status
+                            # Lower-score external apply: attempt via Vision Agent
+                            from src.agents.vision_agent import process_external_apply
 
-                            job_record.error_message = result.error
-                            job_record.queue_reason = result.reason or "apply_failed"
-                            await update_job_status(
-                                session,
-                                job_record.id,
-                                "apply_failed",
-                                reason=f"External apply failed: {result.error}",
+                            result = await process_external_apply(
+                                job_record=job_record,
+                                profile=user_profile,
+                                page=page,
+                                claude_client=claude_client,
+                                min_salary=goals_profile.min_salary,
                             )
+                            if result.ok:
+                                from src.db.job_repo import update_job_status
+
+                                job_record.applied_at = datetime.now(UTC).isoformat()
+                                await update_job_status(
+                                    session,
+                                    job_record.id,
+                                    "applied",
+                                    reason="External apply submitted via Vision Agent",
+                                )
+                            else:
+                                from src.db.job_repo import update_job_status
+
+                                job_record.error_message = result.error
+                                job_record.queue_reason = result.reason or "apply_failed"
+                                await update_job_status(
+                                    session,
+                                    job_record.id,
+                                    "apply_failed",
+                                    reason=f"External apply failed: {result.error}",
+                                )
 
                     # Step 10: Restore resume base after each application
                     await restore_resume_base(

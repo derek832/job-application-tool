@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, field_serializer
+from pydantic import BaseModel, ConfigDict, field_serializer, field_validator
 
 # ---------------------------------------------------------------------------
 # Configuration schemas (used for both GET responses and PUT request bodies)
@@ -20,8 +20,14 @@ from pydantic import BaseModel, ConfigDict, field_serializer
 class SearchConfig(BaseModel):
     """LinkedIn search parameters.
 
+    Supports multiple keyword queries per cycle. If ``search_queries`` is
+    populated, each query string is run as a separate LinkedIn search during
+    the same pipeline cycle. The legacy ``keywords`` field is used as a
+    fallback when ``search_queries`` is empty.
+
     Attributes:
-        keywords: Comma-separated search keywords.
+        keywords: Single search keywords string (legacy, used if search_queries is empty).
+        search_queries: List of keyword query strings to run each cycle.
         location: Geographic location filter.
         job_type: Employment type filter.
         experience_level: Seniority level filter.
@@ -31,10 +37,32 @@ class SearchConfig(BaseModel):
     model_config = ConfigDict(strict=False)
 
     keywords: str | None = None
+    search_queries: list[str] = []
     location: str | None = None
     job_type: str | None = None
     experience_level: str | None = None
     remote_pref: str | None = None
+
+    @field_validator("search_queries", mode="before")
+    @classmethod
+    def coerce_search_queries(cls, v: list[str] | None) -> list[str]:
+        """Coerce None to empty list for backward compatibility with stored configs."""
+        if v is None:
+            return []
+        return v
+
+    def get_keyword_list(self) -> list[str]:
+        """Return the list of keyword queries to execute this cycle.
+
+        If ``search_queries`` is populated, returns that list. Otherwise falls
+        back to the single ``keywords`` field wrapped in a list. Returns an
+        empty list if neither is configured.
+        """
+        if self.search_queries:
+            return self.search_queries
+        if self.keywords:
+            return [self.keywords]
+        return []
 
 
 class GoalsProfile(BaseModel):
@@ -303,7 +331,8 @@ class SearchConfigUpdate(BaseModel):
     """Request body for PUT /config/search.
 
     Attributes:
-        keywords: Comma-separated search keywords.
+        keywords: Single search keywords string (legacy).
+        search_queries: List of keyword query strings to run each cycle.
         location: Geographic location filter.
         job_type: Employment type filter.
         experience_level: Seniority level filter.
@@ -313,6 +342,7 @@ class SearchConfigUpdate(BaseModel):
     model_config = ConfigDict(strict=False)
 
     keywords: str | None = None
+    search_queries: list[str] | None = None
     location: str | None = None
     job_type: str | None = None
     experience_level: str | None = None

@@ -2,12 +2,16 @@
 
 ## Blocking — Needed for Full Pipeline
 
-- [ ] **Fix SMS notification async bug** — `'coroutine' object has no attribute 'ok'` in scoring stage. Missing `await` on the notification call. One-line fix.
+- [x] **Fix tailoring stage async bug** — `'coroutine' object has no attribute 'ok'` in tailoring stage. Same missing `await` pattern as the SMS fix.
 - [ ] **Re-authorize Google Apps Script** — GDocs returns 401. Need to re-deploy or re-authorize the Apps Script web app so resume tailoring and PDF export work.
-- [ ] **Multiple search queries per cycle** — Currently runs one search. Need to support all 4 queries ("Security engineer NOT devsecops", "GRC", "security manager", "cyber security") each cycle.
+- [x] **Multiple search queries per cycle** — Currently runs one search. Need to support all 4 queries ("Security engineer NOT devsecops", "GRC", "security manager", "cyber security") each cycle.
+- [x] **High-match external apply workflow** — For 90%+ scores that aren't Easy Apply: tailor the resume (ATS-optimized PDF ready) BEFORE sending the SMS notification. The text should say "resume is ready, go apply" not "go tailor and apply." For stretch roles and lower scores, batch these for later review.
+- [ ] **Easy Apply automation** — Fill and submit LinkedIn Easy Apply forms using profile data + tailored resume PDF.
+- [ ] **External apply via Vision Agent** — For non-Easy Apply jobs, navigate to the external ATS, fill forms using the Vision Agent (screenshot → identify fields → fill). Escalate to human queue if CAPTCHA or unrecognized fields.
 
 ## Features to Add
 
+- [ ] **ATS optimization summary on job cards** — Show what changes Claude made to the resume for each job (keywords added, sections rewritten, etc.) in the expandable History card. Requires a new field or storing a diff/summary from the tailoring stage.
 - [ ] **Supplementary context document support** — Add a second Google Doc (or local file) containing weekly work notes/detailed experience that gets passed to Claude alongside the resume during scoring and tailoring. Keeps the resume clean for PDF export while giving Claude richer context for matching and keyword optimization.
 - [ ] **Application response tracking** — Add statuses like "interview_scheduled" or "response_received" that you can manually set, plus tracking response rates over time.
 - [ ] **Application analytics dashboard** — Track applications over time, response rates, which job titles/companies convert to interviews.
@@ -44,4 +48,5 @@
 - [x] **Clone LinkedIn Session button** — Extension can export cookies to the automator (though CDP approach is preferred).
 - [x] **Token storage abstraction** — Works with both `chrome.storage.local` and `localStorage` fallback.
 - [x] **Run Now actually triggers pipeline** — Was only setting status before, now calls `trigger_now()`.
+- [x] **SMS notifications working** — Fixed missing `await` on `send_sms`. Notifications send for stretch roles and boundary scores.
 - [x] **Playwright version mismatch fixed** — Dockerfile installs same version as requirements.txt.
