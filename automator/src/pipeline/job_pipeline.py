@@ -183,17 +183,7 @@ async def run_pipeline(session: AsyncSession | None = None) -> None:
         logger.info("pipeline_connecting_to_chrome", cdp_url=cdp_url)
 
         try:
-            # Read the websocket URL written by start-chrome-debug.bat
-            ws_url_path = os.path.join("data", "chrome-ws-url.txt")
-            if os.path.exists(ws_url_path):
-                with open(ws_url_path) as f:
-                    ws_url = f.read().strip()
-                logger.info("pipeline_chrome_ws_url_from_file", ws_url=ws_url)
-                browser = await pw.chromium.connect_over_cdp(ws_url)
-            else:
-                logger.info("pipeline_chrome_connecting_direct", url=cdp_url)
-                browser = await pw.chromium.connect_over_cdp(cdp_url)
-
+            browser = await _connect_to_chrome(pw, cdp_url)
             browser_context = (
                 browser.contexts[0] if browser.contexts else await browser.new_context()
             )
@@ -577,6 +567,65 @@ async def run_pipeline(session: AsyncSession | None = None) -> None:
     await session.commit()
 
     logger.info("pipeline_run_completed", last_run_at=now_iso)
+
+
+async def _connect_to_chrome(pw, cdp_url: str):
+    """Connect to Chrome via CDP with automatic websocket URL discovery.
+
+    Tries multiple strategies in order:
+    1. Stored websocket URL from file (fastest, works if Chrome hasn't restarted)
+    2. Fresh discovery from Chrome's /json/version endpoint (handles restarts)
+    3. Direct CDP URL connection (fallback)
+
+    Updates the stored websocket URL file on successful discovery.
+
+    Args:
+        pw: The Playwright instance.
+        cdp_url: The base CDP URL (e.g., http://host.docker.internal:9222).
+
+    Returns:
+        A connected Browser instance.
+
+    Raises:
+        Exception: If all connection strategies fail.
+    """
+    import httpx
+
+    ws_url_path = os.path.join("data", "chrome-ws-url.txt")
+
+    # Strategy 1: Try stored websocket URL
+    if os.path.exists(ws_url_path):
+        with open(ws_url_path) as f:
+            ws_url = f.read().strip()
+        if ws_url:
+            try:
+                logger.info("chrome_trying_stored_ws_url", ws_url=ws_url[:60])
+                browser = await pw.chromium.connect_over_cdp(ws_url)
+                return browser
+            except Exception as exc:
+                logger.warning("chrome_stored_ws_url_stale", error=str(exc)[:80])
+
+    # Strategy 2: Discover fresh websocket URL from /json/version
+    try:
+        async with httpx.AsyncClient(follow_redirects=True) as client:
+            resp = await client.get(f"{cdp_url}/json/version", timeout=5.0)
+            if resp.status_code == 200:
+                version_data = resp.json()
+                ws_url = version_data.get("webSocketDebuggerUrl", "")
+                if ws_url:
+                    logger.info("chrome_discovered_ws_url", ws_url=ws_url[:60])
+                    browser = await pw.chromium.connect_over_cdp(ws_url)
+                    # Update the stored file for next time
+                    with open(ws_url_path, "w") as f:
+                        f.write(ws_url)
+                    return browser
+    except Exception as exc:
+        logger.warning("chrome_discovery_failed", error=str(exc)[:80])
+
+    # Strategy 3: Direct CDP URL
+    logger.info("chrome_trying_direct_cdp", url=cdp_url)
+    browser = await pw.chromium.connect_over_cdp(cdp_url)
+    return browser
 
 
 async def _get_jobs_by_status(session: AsyncSession, status: str) -> list[JobRecord]:

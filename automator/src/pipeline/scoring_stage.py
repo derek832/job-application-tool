@@ -18,7 +18,7 @@ from src.db.job_repo import update_job_status
 from src.db.models import JobRecord, NotificationLog
 from src.integrations.sms_gateway import SMSSettings, compose_sms, send_sms
 from src.integrations.sms_rate_limiter import check_rate_limit
-from src.pipeline.fit_classifier import classify_fit, has_deal_breaker, is_threshold_boundary
+from src.pipeline.fit_classifier import classify_fit, is_threshold_boundary
 
 logger = structlog.get_logger(__name__)
 
@@ -204,7 +204,9 @@ async def _send_notification(
         trigger_reason: The reason for the notification.
         sms_settings: SMS gateway settings. If None, notification is logged but not sent.
     """
-    sms_body = compose_sms(job_record.job_title, job_record.company, trigger_reason)
+    sms_body = compose_sms(
+        job_record.job_title, job_record.company, trigger_reason, job_record.fit_score
+    )
     now_iso = datetime.now(UTC).isoformat()
 
     if sms_settings is None:

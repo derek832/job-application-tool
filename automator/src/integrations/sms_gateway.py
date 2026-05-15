@@ -57,29 +57,36 @@ class SMSSettings:
     sms_gateway: str
 
 
-def compose_sms(job_title: str, company: str, trigger_reason: str) -> str:
+def compose_sms(
+    job_title: str,
+    company: str,
+    trigger_reason: str,
+    fit_score: int | None = None,
+) -> str:
     """Compose an SMS message containing job info and an action prompt.
 
-    Builds a message with the job title, company name, trigger reason, and a
-    fixed action prompt. Truncates the result to 160 characters to ensure
-    single-message delivery.
+    Builds a message with the job title, company name, fit score (if available),
+    trigger reason, and a fixed action prompt. Truncates the result to 160
+    characters to ensure single-message delivery.
 
     Args:
         job_title: The title of the job posting.
         company: The company name.
         trigger_reason: Brief description of why the notification was triggered.
+        fit_score: The Claude-assigned fit score (0-100), if available.
 
     Returns:
-        A string of at most 160 characters containing all three fields and an action prompt.
+        A string of at most 160 characters.
     """
-    full_message = f"{job_title} @ {company}: {trigger_reason}. {ACTION_PROMPT}"
+    score_str = f" ({fit_score}%)" if fit_score is not None else ""
+    full_message = f"{job_title} @ {company}{score_str}: {trigger_reason}. {ACTION_PROMPT}"
     if len(full_message) <= SMS_MAX_LENGTH:
         return full_message
 
     # Truncate while preserving the action prompt suffix
     suffix = f"... {ACTION_PROMPT}"
     available = SMS_MAX_LENGTH - len(suffix)
-    prefix = f"{job_title} @ {company}: {trigger_reason}"
+    prefix = f"{job_title} @ {company}{score_str}: {trigger_reason}"
     truncated = prefix[:available] + suffix
     return truncated
 
