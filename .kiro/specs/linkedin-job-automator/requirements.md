@@ -172,13 +172,14 @@ The system operates on a Monday–Friday schedule, targeting jobs posted in the 
 
 #### Acceptance Criteria
 
-1. THE Automator SHALL send SMS notifications via a Gmail account using the carrier's email-to-SMS gateway address configured by the user.
-2. THE user SHALL configure the SMS gateway address (e.g., 5551234567@txt.att.net) in the Extension settings.
+1. THE Automator SHALL send SMS notifications via the Gmail API (OAuth2) using the carrier's email-to-SMS gateway address configured by the user.
+2. THE user SHALL configure the SMS gateway address (e.g., 5307558669@vtext.com) in the Extension settings.
 3. WHEN a Notification_Trigger condition is met, THE Automator SHALL compose and send an SMS message within 60 seconds of detecting the condition.
-4. THE SMS message SHALL include: a brief description of the issue, the job title and company name, and a short action prompt (e.g., "Open Kiro to review").
+4. THE SMS message SHALL include: a brief description of the issue, the job title and company name, and a short action prompt (e.g., "Open extension to review").
 5. THE SMS message SHALL be 160 characters or fewer to ensure single-message delivery.
-6. IF the Gmail send fails, THEN THE Automator SHALL retry up to 3 times at 30-second intervals before logging the failure and continuing.
+6. IF the Gmail API send fails, THEN THE Automator SHALL retry up to 3 times with [5s, 15s, 30s] backoff before logging the failure and continuing.
 7. THE Automator SHALL NOT send more than 10 SMS notifications within any 1-hour window to prevent notification flooding.
+8. THE Automator SHALL authenticate with the Gmail API using OAuth2 with the `gmail.send` scope. The OAuth2 refresh token is stored locally in `data/gmail_token.json` and refreshed automatically.
 
 ---
 

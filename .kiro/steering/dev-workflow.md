@@ -201,11 +201,12 @@ Environment variables required in `.env`:
 ```
 CLAUDE_API_KEY=
 GMAIL_USER=
-GMAIL_APP_PASSWORD=
 GOOGLE_APPS_SCRIPT_URL=
 API_TOKEN=                      # Leave blank on first run; auto-generated
 DATA_DIR=./data                 # Host path for the mounted volume
 ```
+
+Additionally, the Gmail OAuth2 token file (`data/gmail_token.json`) must be generated once via `python authorize_gmail.py` before the SMS notification feature will work. See the Gmail OAuth2 setup section below.
 
 ## Google Apps Script Deployment
 

@@ -9,17 +9,32 @@
  *      - Who has access: Only myself
  *   4. Copy the deployment URL into .env as GOOGLE_APPS_SCRIPT_URL.
  *   5. On first run, authorize the script when prompted.
+ *   6. Set the document ID in Script Properties:
+ *      - Open Project Settings (gear icon)
+ *      - Under "Script Properties", add a property:
+ *        Key: DOCUMENT_ID
+ *        Value: <your Google Doc resume document ID>
+ *      - The document ID is the long string in the Doc URL:
+ *        https://docs.google.com/document/d/<DOCUMENT_ID>/edit
  *
  * The Automator calls this endpoint via HTTPS POST with a JSON body:
  *   { "action": "read" | "write" | "export_pdf", "content": "..." }
- *
- * Replace DOCUMENT_ID below with the ID of your Google Doc resume.
- * The document ID is the long string in the Doc URL:
- *   https://docs.google.com/document/d/<DOCUMENT_ID>/edit
  */
 
-// TODO: Replace with your Google Doc resume document ID.
-var DOCUMENT_ID = "YOUR_DOCUMENT_ID_HERE";
+/**
+ * Retrieves the configured Google Doc document ID from Script Properties.
+ *
+ * @returns {string} The document ID.
+ * @throws {Error} If DOCUMENT_ID is not configured in Script Properties.
+ */
+function getDocumentId() {
+  var props = PropertiesService.getScriptProperties();
+  var docId = props.getProperty("DOCUMENT_ID");
+  if (!docId) {
+    throw new Error("DOCUMENT_ID not configured in Script Properties");
+  }
+  return docId;
+}
 
 /**
  * Handles POST requests from the Automator service.
@@ -29,8 +44,16 @@ var DOCUMENT_ID = "YOUR_DOCUMENT_ID_HERE";
  */
 function doPost(e) {
   try {
+    if (!e || !e.postData || !e.postData.contents) {
+      return jsonResponse({ error: "Missing request body" });
+    }
+
     var payload = JSON.parse(e.postData.contents);
     var action = payload.action;
+
+    if (!action) {
+      return jsonResponse({ error: "Missing required field: action" });
+    }
 
     if (action === "read") {
       return handleRead();
@@ -39,10 +62,10 @@ function doPost(e) {
     } else if (action === "export_pdf") {
       return handleExportPdf();
     } else {
-      return jsonResponse({ error: "unknown_action", message: "Unknown action: " + action });
+      return jsonResponse({ error: "Unknown action: " + action });
     }
   } catch (err) {
-    return jsonResponse({ error: "internal_error", message: err.toString() });
+    return jsonResponse({ error: err.toString() });
   }
 }
 
@@ -52,7 +75,8 @@ function doPost(e) {
  * @returns {ContentService.TextOutput} JSON with { content: string }.
  */
 function handleRead() {
-  var doc = DocumentApp.openById(DOCUMENT_ID);
+  var docId = getDocumentId();
+  var doc = DocumentApp.openById(docId);
   var body = doc.getBody();
   var content = body.getText();
   return jsonResponse({ content: content });
@@ -65,7 +89,12 @@ function handleRead() {
  * @returns {ContentService.TextOutput} JSON with { success: true }.
  */
 function handleWrite(content) {
-  var doc = DocumentApp.openById(DOCUMENT_ID);
+  if (content === undefined || content === null) {
+    return jsonResponse({ error: "Missing required field: content" });
+  }
+
+  var docId = getDocumentId();
+  var doc = DocumentApp.openById(docId);
   var body = doc.getBody();
   body.clear();
   body.setText(content);
@@ -76,14 +105,15 @@ function handleWrite(content) {
 /**
  * Exports the resume document as a PDF and returns it base64-encoded.
  *
- * @returns {ContentService.TextOutput} JSON with { pdf_base64: string }.
+ * @returns {ContentService.TextOutput} JSON with { pdf: string }.
  */
 function handleExportPdf() {
-  var file = DriveApp.getFileById(DOCUMENT_ID);
+  var docId = getDocumentId();
+  var file = DriveApp.getFileById(docId);
   var pdfBlob = file.getAs("application/pdf");
   var pdfBytes = pdfBlob.getBytes();
   var base64 = Utilities.base64Encode(pdfBytes);
-  return jsonResponse({ pdf_base64: base64 });
+  return jsonResponse({ pdf: base64 });
 }
 
 /**

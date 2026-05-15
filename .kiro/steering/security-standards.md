@@ -26,7 +26,8 @@ inclusion: always
 
 ## Secrets Handling
 
-- Secrets (API keys, passwords, tokens) are passed exclusively via environment variables. Never hardcode them.
+- Secrets (API keys, OAuth tokens) are passed exclusively via environment variables or stored as token files on the mounted volume. Never hardcode them.
+- Gmail authentication uses OAuth2 with a refresh token stored in `data/gmail_token.json`. The credentials file (`data/gmail_credentials.json`) and token file must be in `.gitignore`.
 - Never log secret values. When logging configuration, redact secrets: `claude_api_key=***`.
 - The `GET /config/settings` API endpoint must return `"***"` for all secret fields.
 - The `.env` file (used for local Docker Compose development) must be listed in `.gitignore` and `.dockerignore`.
