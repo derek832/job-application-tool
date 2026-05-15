@@ -1,0 +1,31 @@
+services:
+  automator:
+    build:
+      context: ./automator
+      dockerfile: Dockerfile
+    image: job-application-tool-automator
+    ports:
+      # Bind exclusively to localhost — never expose to the network
+      - "127.0.0.1:7432:7432"
+    volumes:
+      - app-data:/app/data
+    environment:
+      - CLAUDE_API_KEY=${CLAUDE_API_KEY}
+      - GMAIL_USER=${GMAIL_USER}
+      - GMAIL_APP_PASSWORD=${GMAIL_APP_PASSWORD}
+      - GOOGLE_APPS_SCRIPT_URL=${GOOGLE_APPS_SCRIPT_URL}
+      - API_TOKEN=${API_TOKEN}
+      - DATA_DIR=/app/data
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - PLAYWRIGHT_TRACE=${PLAYWRIGHT_TRACE:-0}
+    restart: unless-stopped
+    # Run as non-root (appuser defined in Dockerfile)
+    user: appuser
+
+volumes:
+  app-data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ${DATA_DIR:-./data}
