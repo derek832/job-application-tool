@@ -222,6 +222,7 @@ class JobRecordOut(BaseModel):
     fit_rationale: str | None = None
     description_text: str | None = None
     resume_snapshot: str | None = None
+    tailored_resume_text: str | None = None
     tailored_resume_pdf: str | None = None
     cover_letter_text: str | None = None
     error_message: str | None = None

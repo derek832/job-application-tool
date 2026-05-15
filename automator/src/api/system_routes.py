@@ -109,6 +109,7 @@ async def get_status(
 
 @router.post("/run", response_model=StatusResponse)
 async def trigger_run(
+    skip_discovery: bool = False,
     session: AsyncSession = Depends(get_session),
     _: None = Depends(verify_token),
 ) -> StatusResponse:
@@ -116,11 +117,17 @@ async def trigger_run(
 
     Sets the system state to "running". The actual pipeline execution is
     handled by the scheduler/pipeline layer which monitors state changes.
+
+    Args:
+        skip_discovery: If True, skips discovery and scoring stages. Useful
+            for debugging tailoring/apply stages without burning Claude tokens
+            on re-scoring existing jobs.
     """
-    logger.info("manual_run_triggered")
+    logger.info("manual_run_triggered", skip_discovery=skip_discovery)
 
     system_state_data = await get_config(session, "system_state") or {}
     system_state_data["status"] = "running"
+    system_state_data["skip_discovery"] = skip_discovery
     await set_config(session, "system_state", system_state_data)
     await session.commit()
 
