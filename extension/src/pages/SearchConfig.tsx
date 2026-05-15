@@ -29,6 +29,7 @@ const REMOTE_PREFS = [
 export function SearchConfig(): React.JSX.Element {
   const [form, setForm] = useState<SearchConfigType>({
     keywords: null,
+    search_queries: [],
     location: null,
     job_type: null,
     experience_level: null,
@@ -70,7 +71,7 @@ export function SearchConfig(): React.JSX.Element {
     }
   }
 
-  function updateField(field: keyof SearchConfigType, value: string) {
+  function updateField(field: keyof Omit<SearchConfigType, "search_queries">, value: string) {
     setForm((prev) => ({ ...prev, [field]: value || null }));
   }
 
@@ -96,15 +97,19 @@ export function SearchConfig(): React.JSX.Element {
       )}
 
       <form onSubmit={handleSave} className="space-y-4">
-        <FormField label="Keywords">
-          <input
-            type="text"
-            value={form.keywords ?? ""}
-            onChange={(e) => updateField("keywords", e.target.value)}
-            placeholder="e.g. software engineer, react"
-            className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+        <div>
+          <label className="block text-xs font-medium text-gray-600 mb-1.5">
+            Search Queries
+            <span className="ml-1 text-gray-400 font-normal">(max 10)</span>
+          </label>
+          <p className="text-xs text-gray-400 mb-2">
+            Each query runs as a separate LinkedIn search. All share the same filters below.
+          </p>
+          <SearchQueryList
+            queries={form.search_queries}
+            onChange={(queries) => setForm((f) => ({ ...f, search_queries: queries }))}
           />
-        </FormField>
+        </div>
 
         <FormField label="Location">
           <input
@@ -169,6 +174,83 @@ function FormField({ label, children }: { label: string; children: React.ReactNo
     <div>
       <label className="block text-xs font-medium text-gray-600 mb-1.5">{label}</label>
       {children}
+    </div>
+  );
+}
+
+const MAX_QUERIES = 10;
+
+function SearchQueryList({
+  queries,
+  onChange,
+}: {
+  queries: string[];
+  onChange: (queries: string[]) => void;
+}): React.JSX.Element {
+  const [input, setInput] = useState("");
+
+  function addQuery() {
+    const value = input.trim();
+    if (value && !queries.includes(value) && queries.length < MAX_QUERIES) {
+      onChange([...queries, value]);
+      setInput("");
+    }
+  }
+
+  function handleKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      addQuery();
+    }
+  }
+
+  function removeQuery(index: number) {
+    onChange(queries.filter((_, i) => i !== index));
+  }
+
+  return (
+    <div className="space-y-2">
+      <div className="space-y-1.5">
+        {queries.map((query, i) => (
+          <div
+            key={`${query}-${i}`}
+            className="flex items-center gap-2 px-3 py-1.5 bg-white border border-gray-200 rounded-lg"
+          >
+            <span className="flex-1 text-sm text-gray-800">{query}</span>
+            <button
+              type="button"
+              onClick={() => removeQuery(i)}
+              className="text-gray-400 hover:text-red-500 text-sm"
+              aria-label={`Remove query: ${query}`}
+            >
+              ×
+            </button>
+          </div>
+        ))}
+      </div>
+      {queries.length < MAX_QUERIES && (
+        <div className="flex gap-2">
+          <input
+            type="text"
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            onKeyDown={handleKeyDown}
+            placeholder="e.g. security engineer NOT devsecops"
+            className="flex-1 px-3 py-2 text-sm border border-gray-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+          />
+          <button
+            type="button"
+            onClick={addQuery}
+            disabled={!input.trim()}
+            className="px-3 py-2 text-sm font-medium text-blue-600 border border-blue-200 rounded-lg hover:bg-blue-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+          >
+            Add
+          </button>
+        </div>
+      )}
+      {queries.length >= MAX_QUERIES && (
+        <p className="text-xs text-amber-600">Maximum of {MAX_QUERIES} queries reached.</p>
+      )}
     </div>
   );
 }
