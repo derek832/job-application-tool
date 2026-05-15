@@ -110,7 +110,7 @@ class GDocsClient:
                 action=payload.get("action"),
             )
             try:
-                async with httpx.AsyncClient() as client:
+                async with httpx.AsyncClient(follow_redirects=True) as client:
                     response = await client.post(
                         self._endpoint_url,
                         json=payload,
