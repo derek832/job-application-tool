@@ -5,6 +5,9 @@
 **/gmail_token.json
 **/gmail_credentials.json
 
+# Data volume (DB, browser profile, backups, traces, logs)
+data/
+
 # Python
 __pycache__/
 *.py[cod]
