@@ -1,0 +1,29 @@
+# Secrets — never bake into image
+.env
+*.db
+*.sqlite
+
+# Python artifacts
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+htmlcov/
+.coverage
+
+# Test files (not needed in production image)
+tests/
+
+# Logs and generated artifacts
+*.log
+*.pdf
+data/
+
+# Git and IDE
+.git/
+.gitignore
+.kiro/
+.vscode/
