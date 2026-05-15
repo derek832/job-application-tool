@@ -6,7 +6,7 @@
  *   2. Paste this file contents.
  *   3. Deploy → New deployment → Web App
  *      - Execute as: Me
- *      - Who has access: Only myself
+ *      - Who has access: Anyone
  *   4. Copy the deployment URL into .env as GOOGLE_APPS_SCRIPT_URL.
  *   5. On first run, authorize the script when prompted.
  *   6. Set the document ID in Script Properties:
@@ -18,7 +18,7 @@
  *        https://docs.google.com/document/d/<DOCUMENT_ID>/edit
  *
  * The Automator calls this endpoint via HTTPS POST with a JSON body:
- *   { "action": "read" | "write" | "export_pdf", "content": "..." }
+ *   { "action": "read" | "write_and_export" | "export_pdf", "content": "..." }
  */
 
 /**
@@ -57,8 +57,10 @@ function doPost(e) {
 
     if (action === "read") {
       return handleRead();
-    } else if (action === "write") {
-      return handleWrite(payload.content);
+    } else if (action === "write_and_export") {
+      return handleWriteAndExport(payload.content);
+    } else if (action === "tailor_and_export") {
+      return handleTailorAndExport(payload.replacements);
     } else if (action === "export_pdf") {
       return handleExportPdf();
     } else {
@@ -83,39 +85,110 @@ function handleRead() {
 }
 
 /**
- * Overwrites the resume document body with new content.
+ * Creates a temporary document with the tailored content, exports it as PDF,
+ * then deletes the temp document. The original resume document is never modified.
  *
- * @param {string} content - The new plain-text resume content.
- * @returns {ContentService.TextOutput} JSON with { success: true }.
+ * @param {string} content - The tailored resume text to export as PDF.
+ * @returns {ContentService.TextOutput} JSON with { pdf: base64, success: true }.
  */
-function handleWrite(content) {
+function handleWriteAndExport(content) {
   if (content === undefined || content === null) {
     return jsonResponse({ error: "Missing required field: content" });
   }
 
-  var docId = getDocumentId();
-  var doc = DocumentApp.openById(docId);
-  var body = doc.getBody();
+  // Create a temporary document for the tailored resume
+  var tempDoc = DocumentApp.create("_tailored_resume_temp");
+  var tempDocId = tempDoc.getId();
 
-  // Workaround for "Can't remove the last paragraph" error:
-  // The rule is: you cannot remove the LAST child of a body section.
-  // Strategy: append new content at the end (making it the last child),
-  // then remove all previous children (which are no longer last).
-  var numBefore = body.getNumChildren();
-  body.appendParagraph(content);
+  try {
+    // Write the tailored content
+    var body = tempDoc.getBody();
+    body.setText(content);
+    tempDoc.saveAndClose();
 
-  // Now remove all the old elements (indices 0 through numBefore-1)
-  // Remove from index 0 repeatedly since indices shift down
-  for (var i = 0; i < numBefore; i++) {
-    body.removeChild(body.getChild(0));
+    // Export as PDF
+    var file = DriveApp.getFileById(tempDocId);
+    var pdfBlob = file.getAs("application/pdf");
+    var pdfBytes = pdfBlob.getBytes();
+    var base64 = Utilities.base64Encode(pdfBytes);
+
+    // Delete the temp document
+    DriveApp.getFileById(tempDocId).setTrashed(true);
+
+    return jsonResponse({ pdf: base64, success: true });
+  } catch (err) {
+    // Clean up temp doc on error
+    try {
+      DriveApp.getFileById(tempDocId).setTrashed(true);
+    } catch (cleanupErr) {
+      // Ignore cleanup errors
+    }
+    throw err;
   }
-
-  doc.saveAndClose();
-  return jsonResponse({ success: true });
 }
 
 /**
- * Exports the resume document as a PDF and returns it base64-encoded.
+ * Copies the original resume document, applies find-and-replace pairs to
+ * preserve formatting while optimizing for ATS, exports as PDF, then deletes
+ * the copy. The original document is never modified.
+ *
+ * @param {Array<{find: string, replace: string}>} replacements - Text replacement pairs.
+ * @returns {ContentService.TextOutput} JSON with { pdf: base64, success: true, replacements_applied: number }.
+ */
+function handleTailorAndExport(replacements) {
+  if (!replacements || !Array.isArray(replacements)) {
+    return jsonResponse({ error: "Missing or invalid 'replacements' array" });
+  }
+
+  var docId = getDocumentId();
+  var originalFile = DriveApp.getFileById(docId);
+
+  // Copy the original document (preserves all formatting)
+  var copy = originalFile.makeCopy("_tailored_resume_temp");
+  var copyId = copy.getId();
+
+  try {
+    var doc = DocumentApp.openById(copyId);
+    var body = doc.getBody();
+
+    var applied = 0;
+    for (var i = 0; i < replacements.length; i++) {
+      var pair = replacements[i];
+      if (pair.find && pair.replace) {
+        // replaceText uses regex — escape special chars in the find string
+        var escaped = pair.find.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+        var found = body.findText(escaped);
+        if (found) {
+          body.replaceText(escaped, pair.replace);
+          applied++;
+        }
+      }
+    }
+
+    doc.saveAndClose();
+
+    // Export the copy as PDF
+    var pdfBlob = DriveApp.getFileById(copyId).getAs("application/pdf");
+    var pdfBytes = pdfBlob.getBytes();
+    var base64 = Utilities.base64Encode(pdfBytes);
+
+    // Delete the temp copy
+    DriveApp.getFileById(copyId).setTrashed(true);
+
+    return jsonResponse({ pdf: base64, success: true, replacements_applied: applied });
+  } catch (err) {
+    // Clean up on error
+    try {
+      DriveApp.getFileById(copyId).setTrashed(true);
+    } catch (cleanupErr) {
+      // Ignore
+    }
+    throw err;
+  }
+}
+
+/**
+ * Exports the original resume document as a PDF and returns it base64-encoded.
  *
  * @returns {ContentService.TextOutput} JSON with { pdf: string }.
  */
