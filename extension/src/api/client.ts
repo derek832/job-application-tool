@@ -114,6 +114,7 @@ export const GoalsProfileSchema = z.object({
   deal_breakers: z.array(z.string()),
   open_to_stretch: z.boolean(),
   career_objective: z.string().nullable(),
+  supplementary_context: z.string().nullable(),
 });
 
 export const UserProfileSchema = z.object({
