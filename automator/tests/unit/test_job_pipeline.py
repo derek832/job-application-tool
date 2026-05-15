@@ -12,6 +12,7 @@ from sqlalchemy.orm import sessionmaker
 
 from src.db.config_repo import set_config
 from src.db.models import Base, JobRecord, StatusTransition
+from src.integrations.linkedin_scraper import DiscoveredJob
 from src.pipeline.job_pipeline import _build_sms_settings, _get_jobs_by_status, run_pipeline
 
 
@@ -79,23 +80,37 @@ async def test_pipeline_runs_discovery_and_creates_records(async_session: AsyncS
     )
     await async_session.commit()
 
-    mock_context = AsyncMock()
     mock_page = AsyncMock()
+    mock_context = AsyncMock()
     mock_context.new_page = AsyncMock(return_value=mock_page)
 
+    mock_browser = AsyncMock()
+    mock_browser.contexts = [mock_context]
+
     mock_pw = AsyncMock()
-    mock_pw.chromium.launch_persistent_context = AsyncMock(return_value=mock_context)
+    mock_pw.chromium.connect_over_cdp = AsyncMock(return_value=mock_browser)
 
     with (
         patch("src.pipeline.job_pipeline.async_playwright") as mock_async_pw,
         patch(
-            "src.pipeline.job_pipeline.discover_jobs",
+            "src.pipeline.job_pipeline.discover_and_extract_jobs",
             new_callable=AsyncMock,
-            return_value=["111", "222"],
-        ),
-        patch(
-            "src.pipeline.job_pipeline.run_extraction",
-            new_callable=AsyncMock,
+            return_value=[
+                DiscoveredJob(
+                    job_id="111",
+                    title="Engineer",
+                    company="Acme",
+                    description="A great job with lots of Python work and more details here.",
+                    linkedin_url="https://www.linkedin.com/jobs/view/111",
+                ),
+                DiscoveredJob(
+                    job_id="222",
+                    title="Developer",
+                    company="Beta Inc",
+                    description="Another great job with lots of Python work and more details.",
+                    linkedin_url="https://www.linkedin.com/jobs/view/222",
+                ),
+            ],
         ),
         patch(
             "src.pipeline.job_pipeline.run_scoring",
@@ -248,14 +263,16 @@ async def test_pipeline_idempotent_on_terminal_state_jobs(async_session: AsyncSe
     pre_transition_count = len(list(pre_transitions_result.scalars().all()))
 
     # Mock Playwright and discovery (returns no new jobs)
-    mock_context = AsyncMock()
     mock_page = AsyncMock()
+    mock_context = AsyncMock()
     mock_context.new_page = AsyncMock(return_value=mock_page)
 
-    mock_pw = AsyncMock()
-    mock_pw.chromium.launch_persistent_context = AsyncMock(return_value=mock_context)
+    mock_browser = AsyncMock()
+    mock_browser.contexts = [mock_context]
 
-    mock_extraction = AsyncMock()
+    mock_pw = AsyncMock()
+    mock_pw.chromium.connect_over_cdp = AsyncMock(return_value=mock_browser)
+
     mock_scoring = AsyncMock()
     mock_tailoring = AsyncMock()
     mock_easy_apply = AsyncMock()
@@ -264,11 +281,10 @@ async def test_pipeline_idempotent_on_terminal_state_jobs(async_session: AsyncSe
     with (
         patch("src.pipeline.job_pipeline.async_playwright") as mock_async_pw,
         patch(
-            "src.pipeline.job_pipeline.discover_jobs",
+            "src.pipeline.job_pipeline.discover_and_extract_jobs",
             new_callable=AsyncMock,
             return_value=[],  # No new jobs discovered
         ),
-        patch("src.pipeline.job_pipeline.run_extraction", mock_extraction),
         patch("src.pipeline.job_pipeline.run_scoring", mock_scoring),
         patch("src.pipeline.job_pipeline.run_tailoring", mock_tailoring),
         patch("src.pipeline.job_pipeline.run_easy_apply", mock_easy_apply),
@@ -279,7 +295,6 @@ async def test_pipeline_idempotent_on_terminal_state_jobs(async_session: AsyncSe
         await run_pipeline(async_session)
 
     # Verify: no pipeline stages were called (no actionable jobs)
-    mock_extraction.assert_not_called()
     mock_scoring.assert_not_called()
     mock_tailoring.assert_not_called()
     mock_easy_apply.assert_not_called()
@@ -332,6 +347,7 @@ async def test_pipeline_calls_all_stages_in_order(async_session: AsyncSession):
             "good_fit_threshold": 75,
             "stretch_threshold": 50,
             "gdocs_script_url": "https://script.google.com/test",
+            "dry_run": False,
         },
     )
     await async_session.commit()
@@ -339,22 +355,27 @@ async def test_pipeline_calls_all_stages_in_order(async_session: AsyncSession):
     # Track call order
     call_order: list[str] = []
 
-    mock_context = AsyncMock()
     mock_page = AsyncMock()
+    mock_context = AsyncMock()
     mock_context.new_page = AsyncMock(return_value=mock_page)
 
+    mock_browser = AsyncMock()
+    mock_browser.contexts = [mock_context]
+
     mock_pw = AsyncMock()
-    mock_pw.chromium.launch_persistent_context = AsyncMock(return_value=mock_context)
+    mock_pw.chromium.connect_over_cdp = AsyncMock(return_value=mock_browser)
 
     async def mock_discover(*args, **kwargs):
         call_order.append("discover")
-        return ["job_001"]
-
-    async def mock_extraction_fn(*args, **kwargs):
-        call_order.append("extraction")
-        # Simulate extraction advancing the job to "extracted"
-        job_record = kwargs.get("job_record") or args[0]
-        job_record.status = "extracted"
+        return [
+            DiscoveredJob(
+                job_id="job_001",
+                title="Engineer",
+                company="Acme",
+                description="A great job with lots of Python work and more details here.",
+                linkedin_url="https://www.linkedin.com/jobs/view/job_001",
+            )
+        ]
 
     async def mock_scoring_fn(*args, **kwargs):
         call_order.append("scoring")
@@ -382,8 +403,10 @@ async def test_pipeline_calls_all_stages_in_order(async_session: AsyncSession):
 
     with (
         patch("src.pipeline.job_pipeline.async_playwright") as mock_async_pw,
-        patch("src.pipeline.job_pipeline.discover_jobs", side_effect=mock_discover),
-        patch("src.pipeline.job_pipeline.run_extraction", side_effect=mock_extraction_fn),
+        patch(
+            "src.pipeline.job_pipeline.discover_and_extract_jobs",
+            side_effect=mock_discover,
+        ),
         patch("src.pipeline.job_pipeline.run_scoring", side_effect=mock_scoring_fn),
         patch("src.pipeline.job_pipeline.run_tailoring", side_effect=mock_tailoring_fn),
         patch("src.pipeline.job_pipeline.run_easy_apply", side_effect=mock_easy_apply_fn),
@@ -394,16 +417,15 @@ async def test_pipeline_calls_all_stages_in_order(async_session: AsyncSession):
         await run_pipeline(async_session)
 
     # Verify all stages were called in the correct order
+    # Note: discovery and extraction are now combined in discover_and_extract_jobs
     assert "discover" in call_order, "Discovery stage was not called"
-    assert "extraction" in call_order, "Extraction stage was not called"
     assert "scoring" in call_order, "Scoring stage was not called"
     assert "tailoring" in call_order, "Tailoring stage was not called"
     assert "easy_apply" in call_order, "Easy Apply stage was not called"
     assert "restore_resume" in call_order, "Restore resume stage was not called"
 
     # Verify ordering: each stage comes after its predecessor
-    assert call_order.index("discover") < call_order.index("extraction")
-    assert call_order.index("extraction") < call_order.index("scoring")
+    assert call_order.index("discover") < call_order.index("scoring")
     assert call_order.index("scoring") < call_order.index("tailoring")
     assert call_order.index("tailoring") < call_order.index("easy_apply")
     assert call_order.index("easy_apply") < call_order.index("restore_resume")

@@ -68,7 +68,7 @@ async def notify(
     sms_body = compose_sms(job_record.job_title, job_record.company, trigger_reason)
 
     # Step 3: Attempt delivery
-    result = send_sms(sms_body, sms_settings)
+    result = await send_sms(sms_body, sms_settings)
 
     # Step 4: Log the result
     success = 1 if result.ok else 0
