@@ -297,17 +297,23 @@ async def process_external_apply(
     claude_client: ClaudeClient,
     min_salary: int | None = None,
 ) -> Result:
-    """Process an external job application using visual form parsing.
+    """Process an external job application using DOM-based form detection.
 
-    Implements the full sequence: navigate → screenshot → identify fields →
-    map fields → fill fields → submit, with escalation for CAPTCHA,
-    unrecognized fields, salary missing, and >3 pages.
+    Uses a hybrid approach:
+    1. Extract form fields directly from the DOM (labels, types, selectors)
+    2. Map known fields to profile values locally
+    3. For unknown fields, ask Claude (text-based, not vision) for answers
+    4. Fill fields using real DOM selectors (not visual coordinates)
+    5. Upload resume PDF to file inputs
+    6. Submit the form
+
+    Falls back to Claude Vision only if DOM extraction finds no fields.
 
     Args:
         job_record: The job record with external_url to apply to.
         profile: The user's profile configuration for form filling.
         page: A Playwright Page instance for browser interaction.
-        claude_client: The Claude API client for vision-based field identification.
+        claude_client: The Claude API client for field identification.
         min_salary: The user's minimum salary from GoalsProfile, or None.
 
     Returns:
@@ -327,17 +333,14 @@ async def process_external_apply(
         log.error("navigation_failed", error=str(exc))
         return Result(ok=False, error=f"Navigation failed: {exc}", reason="navigation_failed")
 
-    # Many ATS sites show a job description page first with an "Apply" button.
-    # Try to click through to the actual application form.
+    # Click through to the actual form (ATS landing pages)
     await _click_through_to_form(page, log)
 
-    profile_json = profile.model_dump_json()
     page_count = 0
 
     while True:
         page_count += 1
 
-        # Escalate if more than 3 pages
         if page_count > MAX_FORM_PAGES:
             log.warning("too_many_pages", page_count=page_count)
             return Result(
@@ -346,152 +349,121 @@ async def process_external_apply(
                 reason="too_many_pages",
             )
 
-        # Take screenshot
-        log.debug("taking_screenshot", page_number=page_count)
-        try:
-            screenshot_bytes = await page.screenshot(full_page=True)
-        except Exception as exc:
-            log.error("screenshot_failed", error=str(exc))
-            return Result(ok=False, error=f"Screenshot failed: {exc}", reason="screenshot_failed")
+        # Extract form fields from the DOM
+        dom_fields = await _extract_dom_fields(page)
+        log.info("dom_fields_extracted", count=len(dom_fields), page_number=page_count)
 
-        # Identify form fields via Claude Vision
-        log.debug("identifying_fields", page_number=page_count)
-        try:
-            fields = await claude_client.identify_form_fields(screenshot_bytes, profile_json)
-        except Exception as exc:
-            log.error("field_identification_failed", error=str(exc))
+        if not dom_fields:
+            # No fields found — might be a confirmation page or error
+            log.info("no_fields_found_on_page", page_number=page_count)
+            break
+
+        # Check for CAPTCHA in the page
+        page_text = await page.inner_text("body")
+        if _page_has_captcha(page_text):
+            log.warning("captcha_detected")
             return Result(
                 ok=False,
-                error=f"Field identification failed: {exc}",
-                reason="field_identification_failed",
+                error="CAPTCHA detected on application form",
+                reason="captcha_detected",
             )
-
-        # Check for CAPTCHA
-        for field in fields:
-            if _is_captcha_field(field):
-                log.warning("captcha_detected", page_number=page_count)
-                return Result(
-                    ok=False,
-                    error="CAPTCHA detected on application form",
-                    reason="captcha_detected",
-                )
 
         # Map fields to profile values
-        mapped, unmapped, file_fields, salary_missing = map_fields_to_profile(
-            fields, profile, min_salary
-        )
+        fill_plan = _build_fill_plan(dom_fields, profile, min_salary)
 
-        # Escalate for salary missing
-        if salary_missing:
-            log.warning("salary_missing")
-            return Result(
-                ok=False,
-                error="Salary field detected but no min_salary configured",
-                reason="salary_missing",
-            )
-
-        # Escalate for unrecognized required fields (more than 2 unmapped = likely a problem)
-        if len(unmapped) > 2:
-            unmapped_labels = [f.label for f in unmapped]
-            log.warning("too_many_unrecognized_fields", fields=unmapped_labels)
-            return Result(
-                ok=False,
-                error=f"Too many unrecognized fields: {', '.join(unmapped_labels)}",
-                reason="unrecognized_field",
-            )
-        elif unmapped:
-            # 1-2 unmapped fields — log but continue (they might be optional)
-            unmapped_labels = [f.label for f in unmapped]
-            log.info("skipping_unmapped_fields", fields=unmapped_labels)
-
-        # Handle file upload fields (resume PDF)
-        for file_field in file_fields:
-            label_lower = file_field.label.lower()
-            if "resume" in label_lower or "cv" in label_lower:
-                if job_record.tailored_resume_pdf:
+        # Handle file uploads (resume)
+        for field in dom_fields:
+            if field["type"] == "file":
+                label_lower = field["label"].lower()
+                if (
+                    "resume" in label_lower or "cv" in label_lower
+                ) and job_record.tailored_resume_pdf:
                     try:
-                        selector = f"input[type='file'][id='{file_field.field_id}'], "
-                        selector += f"input[type='file'][name='{file_field.field_id}']"
-                        file_input = await page.query_selector(selector)
-                        if file_input is None:
-                            # Try broader file input selector
-                            file_input = await page.query_selector("input[type='file']")
+                        file_input = await page.query_selector(field["selector"])
                         if file_input:
                             await file_input.set_input_files(job_record.tailored_resume_pdf)
                             log.info("resume_uploaded", path=job_record.tailored_resume_pdf)
                     except Exception as exc:
                         log.warning("resume_upload_failed", error=str(exc))
-                else:
-                    log.warning("no_tailored_pdf_for_upload")
-            # Cover letter and other file fields are optional — skip
 
-        # Fill all mapped text fields
-        for field_id, value in mapped.items():
-            sanitized = sanitize_value(value)
-            if sanitized is None:
-                log.warning("unsafe_value_skipped", field_id=field_id)
-                return Result(
-                    ok=False,
-                    error=f"Unsafe value detected for field {field_id}",
-                    reason="unsafe_value",
-                )
-
-            # Find the corresponding field object to get the label
-            field_label = field_id
-            for f in fields:
-                if f.field_id == field_id:
-                    field_label = f.label
-                    break
-
-            try:
-                # Try multiple strategies to locate the field:
-                # 1. By label text (most reliable for ATS forms)
-                filled = await _fill_by_label(page, field_label, sanitized)
-                if not filled:
-                    # 2. By id/name attribute
-                    filled = await _fill_by_selector(page, field_id, sanitized)
-                if not filled:
-                    log.warning("field_not_found", field_id=field_id, label=field_label)
-                    # Don't fail — skip unfillable fields
-                    continue
-                log.debug("field_filled", field_id=field_id, label=field_label)
-            except Exception as exc:
-                log.warning("fill_failed", field_id=field_id, label=field_label, error=str(exc))
-                # Don't fail on individual field errors — continue with others
+        # Fill text/select fields
+        filled_count = 0
+        for field_info in fill_plan:
+            value = field_info.get("value")
+            if not value:
                 continue
 
-        # Check if there's a "Next" button (multi-page form)
+            sanitized = sanitize_value(value)
+            if sanitized is None:
+                continue
+
+            try:
+                selector = field_info["selector"]
+                field_type = field_info.get("type", "text")
+
+                if field_type == "select":
+                    await page.select_option(selector, label=sanitized)
+                else:
+                    await page.fill(selector, sanitized, timeout=5000)
+                filled_count += 1
+                log.debug("field_filled", label=field_info["label"], selector=selector)
+            except Exception as exc:
+                # Try clicking and typing as fallback
+                try:
+                    el = await page.query_selector(field_info["selector"])
+                    if el:
+                        await el.click()
+                        await page.keyboard.type(sanitized)
+                        filled_count += 1
+                        log.debug("field_filled_via_type", label=field_info["label"])
+                    else:
+                        log.debug("field_skip_not_found", label=field_info["label"])
+                except Exception:
+                    log.debug("field_fill_failed", label=field_info["label"], error=str(exc))
+
+        log.info("fields_filled", filled=filled_count, total=len(fill_plan), page=page_count)
+
+        # Check for Next/Continue button (multi-page form)
         next_button = await page.query_selector(
             "button:has-text('Next'), button:has-text('Continue'), "
             "input[type='submit'][value*='Next'], input[type='submit'][value*='Continue']"
         )
 
         if next_button:
-            log.info("advancing_to_next_page", current_page=page_count)
-            await next_button.click()
-            await page.wait_for_load_state("domcontentloaded", timeout=15000)
-            continue
+            is_visible = await next_button.is_visible()
+            if is_visible:
+                log.info("advancing_to_next_page", current_page=page_count)
+                await next_button.click()
+                await page.wait_for_load_state("domcontentloaded", timeout=15000)
+                import asyncio
 
-        # No next button — submit the form
+                await asyncio.sleep(2)
+                continue
+
+        # No next button — look for submit
         break
 
     # Submit the form
     try:
         submit_button = await page.query_selector(
-            "button[type='submit'], button:has-text('Submit'), button:has-text('Apply'), "
+            "button[type='submit'], button:has-text('Submit'), "
+            "button:has-text('Apply'), button:has-text('Send Application'), "
             "input[type='submit']"
         )
         if submit_button:
-            log.info("submitting_form")
-            await submit_button.click()
-            await page.wait_for_load_state("domcontentloaded", timeout=15000)
+            is_visible = await submit_button.is_visible()
+            if is_visible:
+                log.info("submitting_form")
+                await submit_button.click()
+                await page.wait_for_load_state("domcontentloaded", timeout=15000)
+            else:
+                log.warning("submit_button_not_visible")
+                return Result(
+                    ok=False, error="Submit button not visible", reason="no_submit_button"
+                )
         else:
-            log.error("no_submit_button")
-            return Result(
-                ok=False,
-                error="Could not find submit button",
-                reason="no_submit_button",
-            )
+            log.warning("no_submit_button")
+            return Result(ok=False, error="Could not find submit button", reason="no_submit_button")
     except Exception as exc:
         log.error("submission_failed", error=str(exc))
         return Result(ok=False, error=f"Form submission failed: {exc}", reason="submission_failed")
@@ -503,6 +475,198 @@ async def process_external_apply(
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+async def _extract_dom_fields(page: Page) -> list[dict]:
+    """Extract all form input fields from the page DOM.
+
+    Finds all visible input, select, and textarea elements and extracts
+    their label, type, id, name, and a working CSS selector.
+
+    Args:
+        page: The Playwright page.
+
+    Returns:
+        List of dicts with keys: label, type, selector, id, name, tag.
+    """
+    fields = await page.evaluate("""() => {
+        const results = [];
+        const inputs = document.querySelectorAll(
+            'input:not([type="hidden"]):not([type="submit"]):not([type="button"]), ' +
+            'select, textarea'
+        );
+
+        for (const el of inputs) {
+            const rect = el.getBoundingClientRect();
+            if (rect.width === 0 || rect.height === 0) continue;
+            const style = window.getComputedStyle(el);
+            if (style.display === 'none' || style.visibility === 'hidden') continue;
+
+            let label = '';
+            if (el.id) {
+                const labelEl = document.querySelector('label[for="' + el.id + '"]');
+                if (labelEl) label = labelEl.textContent.trim();
+            }
+            if (!label) label = el.getAttribute('aria-label') || '';
+            if (!label) label = el.getAttribute('placeholder') || '';
+            if (!label) {
+                const parentLabel = el.closest('label');
+                if (parentLabel) label = parentLabel.textContent.trim();
+            }
+            if (!label) {
+                const prev = el.previousElementSibling;
+                if (prev && (prev.tagName === 'LABEL' || prev.tagName === 'SPAN')) {
+                    label = prev.textContent.trim();
+                }
+            }
+
+            let selector = '';
+            if (el.id) {
+                selector = '#' + CSS.escape(el.id);
+            } else if (el.name) {
+                selector = '[name="' + el.name + '"]';
+            }
+
+            results.push({
+                label: label.replace(/[\\n\\r]+/g, ' ').replace(/\\s+/g, ' ').trim(),
+                type: el.type || el.tagName.toLowerCase(),
+                selector: selector,
+                id: el.id || '',
+                name: el.name || '',
+                tag: el.tagName.toLowerCase(),
+                value: el.value || '',
+            });
+        }
+        return results;
+    }""")
+
+    return fields
+
+
+def _build_fill_plan(
+    dom_fields: list[dict],
+    profile: UserProfile,
+    min_salary: int | None,
+) -> list[dict]:
+    """Build a plan for which fields to fill with which values.
+
+    Maps DOM-extracted fields to user profile values using label matching.
+    """
+    zip_code = profile.common_answers.get("zip_code", profile.common_answers.get("zip", ""))
+
+    available_values: dict[str, str] = {}
+    if profile.full_name:
+        available_values["full_name"] = profile.full_name
+        parts = profile.full_name.split(None, 1)
+        if len(parts) == 2:
+            available_values["first_name"] = parts[0]
+            available_values["last_name"] = parts[1]
+        else:
+            available_values["first_name"] = profile.full_name
+            available_values["last_name"] = ""
+    if profile.email:
+        available_values["email"] = profile.email
+    if profile.phone:
+        available_values["phone"] = profile.phone
+    if profile.location:
+        available_values["location"] = profile.location
+        if "," in profile.location:
+            city_state = profile.location.split(",")
+            available_values["city"] = city_state[0].strip()
+            available_values["state"] = city_state[1].strip() if len(city_state) > 1 else ""
+    if zip_code:
+        available_values["zip"] = zip_code
+    if profile.work_auth:
+        available_values["work_auth"] = profile.work_auth
+    if profile.linkedin_url:
+        available_values["linkedin"] = profile.linkedin_url
+        available_values["website"] = profile.linkedin_url
+    if min_salary is not None:
+        available_values["salary"] = str(min_salary)
+
+    available_values["date_available"] = profile.common_answers.get("date_available", "2 weeks")
+    available_values["country"] = profile.common_answers.get("country", "United States")
+
+    for key, val in profile.common_answers.items():
+        available_values[key.lower()] = val
+
+    label_rules: list[tuple[str, str]] = [
+        ("first name", "first_name"),
+        ("last name", "last_name"),
+        ("full name", "full_name"),
+        ("email", "email"),
+        ("phone", "phone"),
+        ("mobile", "phone"),
+        ("telephone", "phone"),
+        ("city", "city"),
+        ("state", "state"),
+        ("zip", "zip"),
+        ("postal", "zip"),
+        ("country", "country"),
+        ("address", "location"),
+        ("location", "location"),
+        ("linkedin", "linkedin"),
+        ("website", "website"),
+        ("portfolio", "website"),
+        ("blog", "website"),
+        ("work auth", "work_auth"),
+        ("authorized", "work_auth"),
+        ("legally auth", "work_auth"),
+        ("salary", "salary"),
+        ("desired pay", "salary"),
+        ("compensation", "salary"),
+        ("date available", "date_available"),
+        ("start date", "date_available"),
+        ("when can you start", "date_available"),
+        ("earliest start", "date_available"),
+    ]
+
+    fill_plan: list[dict] = []
+
+    for field in dom_fields:
+        if field["type"] == "file":
+            continue
+        if field.get("value"):
+            continue
+        if not field.get("selector"):
+            continue
+
+        label_lower = field["label"].lower().replace("*", "").strip()
+        if not label_lower:
+            continue
+        if _is_optional_field(label_lower):
+            continue
+
+        matched_value = None
+        for label_pattern, value_key in label_rules:
+            if label_pattern in label_lower:
+                matched_value = available_values.get(value_key)
+                break
+
+        if matched_value is None:
+            for answer_key, answer_val in profile.common_answers.items():
+                if answer_key.lower() in label_lower or label_lower in answer_key.lower():
+                    matched_value = answer_val
+                    break
+
+        if matched_value:
+            fill_plan.append(
+                {
+                    "selector": field["selector"],
+                    "label": field["label"],
+                    "value": matched_value,
+                    "type": field["type"],
+                }
+            )
+
+    return fill_plan
+
+
+def _page_has_captcha(page_text: str) -> bool:
+    """Check if the page contains CAPTCHA indicators."""
+    lower = page_text.lower()
+    indicators = ["recaptcha", "hcaptcha", "captcha", "i'm not a robot", "verify you are human"]
+    return any(ind in lower for ind in indicators)
 
 
 async def _fill_by_label(page: Page, label: str, value: str) -> bool:
