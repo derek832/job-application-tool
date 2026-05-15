@@ -41,14 +41,14 @@ graph TD
 
     subgraph "External Services"
         CLAUDE[Claude API\nAnthropic]
-        GMAIL[Gmail SMTP\nSMS Gateway]
+        GMAIL[Gmail API\nOAuth2 → SMS Gateway]
         GDOCS[Google Apps Script\nWeb App]
         LINKEDIN[LinkedIn\nvia Playwright]
         EXTSITE[External Job Sites\nvia Playwright]
     end
 
     API -- "anthropic-sdk" --> CLAUDE
-    API -- "smtplib TLS" --> GMAIL
+    API -- "Gmail API OAuth2" --> GMAIL
     API -- "HTTPS POST" --> GDOCS
     API -- "Playwright CDP" --> LINKEDIN
     API -- "Playwright CDP" --> EXTSITE
@@ -64,7 +64,7 @@ graph TD
 | **Vision_Agent** | Screenshot capture + Claude Vision for external form field identification |
 | **Claude API Client** | Fit scoring, resume tailoring, cover letter generation, form field mapping |
 | **Google Apps Script Client** | Read/write/export Google Doc resume |
-| **SMS Gateway Client** | Gmail SMTP → carrier email-to-SMS |
+| **SMS Gateway Client** | Gmail API (OAuth2) → carrier email-to-SMS |
 | **State_DB** | SQLite persistence for all Job_Records and configuration |
 | **Chrome Extension** | UI: dashboard, queue, config editors, job history |
 
@@ -237,7 +237,7 @@ Configuration keys and their JSON value shapes:
 | `search_config` | `{keywords, location, job_type, experience_level, remote_pref}` |
 | `goals_profile` | `{target_titles[], industries[], company_sizes[], geo_prefs[], min_salary, deal_breakers[], open_to_stretch, career_objective}` |
 | `user_profile` | `{full_name, email, phone, location, work_auth, linkedin_url, common_answers{}}` |
-| `settings` | `{claude_api_key, gmail_user, gmail_app_password, sms_gateway, gdocs_script_url, scheduled_time, good_fit_threshold, stretch_threshold, backup_dir}` |
+| `settings` | `{claude_api_key, gmail_user, sms_gateway, gdocs_script_url, scheduled_time, good_fit_threshold, stretch_threshold, backup_dir}` |
 | `system_state` | `{status: running|paused|idle|error, last_run_at, last_error}` |
 
 ---
@@ -433,7 +433,7 @@ if is_boundary:
 | Google Docs read/write | 3 | 5s, 15s, 30s | `resume_failed` |
 | Easy Apply submission | 1 | immediate | `apply_failed` |
 | External form submission | 0 | — | `apply_failed` |
-| Gmail SMS send | 3 | 30s intervals | logged, continue |
+| Gmail SMS send | 3 | 5s, 15s, 30s | logged, continue |
 
 All retries use exponential backoff with jitter to avoid thundering-herd issues when multiple jobs are processing concurrently.
 
@@ -462,9 +462,10 @@ Each pipeline stage checks the current `status` of the Job_Record before proceed
 
 ### Secrets Management
 
-- All secrets (Claude API key, Gmail credentials, Google OAuth tokens) are passed to Docker via environment variables and stored in the `config` table in the SQLite DB.
+- All secrets (Claude API key, Google OAuth tokens) are passed to Docker via environment variables or stored as token files on the mounted volume.
+- Gmail authentication uses OAuth2 with a refresh token stored in `data/gmail_token.json` on the mounted volume. No app password is needed.
 - The SQLite DB file is on the mounted host volume — the user is responsible for filesystem-level access control.
-- The `GET /config/settings` endpoint redacts secret values (returns `"***"` for API keys and passwords).
+- The `GET /config/settings` endpoint redacts secret values (returns `"***"` for the Claude API key).
 - The Chrome Extension never stores secrets; it reads redacted config from the API.
 
 ### Network Isolation
