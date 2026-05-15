@@ -136,6 +136,7 @@ export const SettingsSchema = z.object({
   gdocs_script_url: z.string().nullable(),
   good_fit_threshold: z.number().int(),
   stretch_threshold: z.number().int(),
+  external_apply_threshold: z.number().int(),
   backup_dir: z.string().nullable(),
   dry_run: z.boolean(),
 });
@@ -316,15 +317,21 @@ export async function updateUserProfile(data: UserProfile): Promise<UserProfile>
   });
 }
 
+const SettingsSchemaLenient = SettingsSchema.extend({
+  external_apply_threshold: z.number().int().optional(),
+});
+
 export async function getSettings(): Promise<Settings> {
-  return request("/config/settings", SettingsSchema);
+  const data = await request("/config/settings", SettingsSchemaLenient);
+  return { ...data, external_apply_threshold: data.external_apply_threshold ?? 80 };
 }
 
 export async function updateSettings(data: Partial<Settings>): Promise<Settings> {
-  return request("/config/settings", SettingsSchema, {
+  const result = await request("/config/settings", SettingsSchemaLenient, {
     method: "PUT",
     body: JSON.stringify(data),
   });
+  return { ...result, external_apply_threshold: result.external_apply_threshold ?? 80 };
 }
 
 // ---------------------------------------------------------------------------

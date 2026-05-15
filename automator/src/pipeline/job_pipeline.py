@@ -438,42 +438,13 @@ async def run_pipeline(session: AsyncSession | None = None) -> None:
                             goals_profile=goals_json,
                         )
                     else:
-                        # External apply: high-match (90%+) jobs get resume tailored
-                        # and user is notified "resume is ready, go apply."
-                        # Lower-score external apply jobs use the Vision Agent.
-                        high_match_threshold = 90
+                        # External apply routing based on configurable threshold:
+                        # - Score >= external_apply_threshold: auto-submit via Vision Agent
+                        # - Score below threshold: resume tailored, notify user to apply manually
+                        ext_threshold = settings.external_apply_threshold
 
-                        if (job_record.fit_score or 0) >= high_match_threshold:
-                            # Resume is already tailored (PDF exported above).
-                            # Notify user and add to human queue for manual submission.
-                            from src.db.job_repo import update_job_status
-                            from src.pipeline.notification_service import notify
-
-                            job_record.queue_reason = "resume_ready_external_apply"
-                            await update_job_status(
-                                session,
-                                job_record.id,
-                                "applying",
-                                reason="High-match external apply — resume tailored, "
-                                "awaiting manual submission",
-                            )
-
-                            if sms_settings:
-                                await notify(
-                                    session=session,
-                                    job_record=job_record,
-                                    trigger_reason="resume_ready_go_apply",
-                                    sms_settings=sms_settings,
-                                )
-
-                            logger.info(
-                                "pipeline_external_apply_resume_ready",
-                                job_id=job_record.id,
-                                fit_score=job_record.fit_score,
-                                pdf_path=job_record.tailored_resume_pdf,
-                            )
-                        else:
-                            # Lower-score external apply: attempt via Vision Agent
+                        if (job_record.fit_score or 0) >= ext_threshold:
+                            # High-match: attempt auto-submission via Vision Agent
                             from src.agents.vision_agent import process_external_apply
 
                             result = await process_external_apply(
@@ -504,6 +475,35 @@ async def run_pipeline(session: AsyncSession | None = None) -> None:
                                     "apply_failed",
                                     reason=f"External apply failed: {result.error}",
                                 )
+                        else:
+                            # Below auto-apply threshold: resume is tailored (PDF ready),
+                            # notify user and add to human queue for manual submission.
+                            from src.db.job_repo import update_job_status
+                            from src.pipeline.notification_service import notify
+
+                            job_record.queue_reason = "resume_ready_external_apply"
+                            await update_job_status(
+                                session,
+                                job_record.id,
+                                "applying",
+                                reason="External apply — resume tailored, "
+                                "awaiting manual submission",
+                            )
+
+                            if sms_settings:
+                                await notify(
+                                    session=session,
+                                    job_record=job_record,
+                                    trigger_reason="resume_ready_go_apply",
+                                    sms_settings=sms_settings,
+                                )
+
+                            logger.info(
+                                "pipeline_external_apply_resume_ready",
+                                job_id=job_record.id,
+                                fit_score=job_record.fit_score,
+                                pdf_path=job_record.tailored_resume_pdf,
+                            )
 
                     # Step 10: Restore resume base after each application
                     await restore_resume_base(

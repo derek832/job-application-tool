@@ -137,6 +137,10 @@ class Settings(BaseModel):
         gdocs_script_url: Deployed Google Apps Script web app URL.
         good_fit_threshold: Minimum score for automatic application (default 75).
         stretch_threshold: Minimum score for human review (default 50).
+        external_apply_threshold: Minimum score for auto-submitting external
+            applications via Vision Agent (default 80). Jobs scoring between
+            good_fit_threshold and this value get tailored PDF but go to human
+            queue for manual submission.
         backup_dir: Local directory path for daily DB backups.
         dry_run: When True, the pipeline runs all stages but skips actual form
             submission. Jobs reach "applying" status but are not submitted.
@@ -150,6 +154,7 @@ class Settings(BaseModel):
     gdocs_script_url: str | None = None
     good_fit_threshold: int = 75
     stretch_threshold: int = 50
+    external_apply_threshold: int = 80
     backup_dir: str | None = None
     dry_run: bool = True
 
@@ -418,6 +423,7 @@ class SettingsUpdate(BaseModel):
         gdocs_script_url: Deployed Google Apps Script web app URL.
         good_fit_threshold: Minimum score for automatic application.
         stretch_threshold: Minimum score for human review.
+        external_apply_threshold: Minimum score for auto-submitting external applies.
         backup_dir: Local directory path for daily DB backups.
         dry_run: When True, skip actual form submission.
     """
@@ -430,5 +436,6 @@ class SettingsUpdate(BaseModel):
     gdocs_script_url: str | None = None
     good_fit_threshold: int | None = None
     stretch_threshold: int | None = None
+    external_apply_threshold: int | None = None
     backup_dir: str | None = None
     dry_run: bool | None = None
