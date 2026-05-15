@@ -77,6 +77,10 @@ class GoalsProfile(BaseModel):
         deal_breakers: Keywords that disqualify a job regardless of fit score.
         open_to_stretch: Whether the user is open to stretch roles.
         career_objective: Free-text career objective statement.
+        supplementary_context: Additional experience notes, project details, or
+            weekly work notes passed to Claude alongside the resume during scoring
+            and tailoring. Keeps the resume clean for PDF export while giving
+            Claude richer context for matching and keyword optimization.
     """
 
     model_config = ConfigDict(strict=False)
@@ -89,6 +93,7 @@ class GoalsProfile(BaseModel):
     deal_breakers: list[str] = []
     open_to_stretch: bool = True
     career_objective: str | None = None
+    supplementary_context: str | None = None
 
 
 class UserProfile(BaseModel):
@@ -361,6 +366,8 @@ class GoalsProfileUpdate(BaseModel):
         deal_breakers: Keywords that disqualify a job regardless of fit score.
         open_to_stretch: Whether the user is open to stretch roles.
         career_objective: Free-text career objective statement.
+        supplementary_context: Additional experience notes passed to Claude
+            alongside the resume during scoring and tailoring.
     """
 
     model_config = ConfigDict(strict=False)
@@ -373,6 +380,7 @@ class GoalsProfileUpdate(BaseModel):
     deal_breakers: list[str] = []
     open_to_stretch: bool = True
     career_objective: str | None = None
+    supplementary_context: str | None = None
 
 
 class UserProfileUpdate(BaseModel):
