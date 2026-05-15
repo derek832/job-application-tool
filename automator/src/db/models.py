@@ -257,3 +257,46 @@ class Config(Base):
 
     def __repr__(self) -> str:
         return f"<Config key={self.key!r} updated_at={self.updated_at!r}>"
+
+
+# ---------------------------------------------------------------------------
+# ATS Accounts
+# ---------------------------------------------------------------------------
+
+
+class ATSAccount(Base):
+    """Stored credentials for external ATS platforms.
+
+    When the Vision Agent encounters a registration page, it creates an account
+    using the user's email and a generated password. Credentials are stored here
+    so they can be reused on subsequent applications to the same ATS platform.
+
+    Attributes:
+        id: Auto-incrementing primary key.
+        domain: The ATS domain (e.g. 'bamboohr.com', 'greenhouse.io').
+        email: The email used to register.
+        password: The generated password.
+        auth_method: How authentication was done ('password' or 'google_oauth').
+        created_at: ISO 8601 timestamp when the account was created.
+        last_used_at: ISO 8601 timestamp of the most recent login.
+        notes: Optional notes (e.g. 'verified via email link').
+    """
+
+    __tablename__ = "ats_accounts"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    domain: Mapped[str] = mapped_column(Text, nullable=False)
+    email: Mapped[str] = mapped_column(Text, nullable=False)
+    password: Mapped[str | None] = mapped_column(Text, nullable=True)
+    auth_method: Mapped[str] = mapped_column(Text, nullable=False, default="password")
+    created_at: Mapped[str] = mapped_column(Text, nullable=False)
+    last_used_at: Mapped[str | None] = mapped_column(Text, nullable=True)
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    __table_args__ = (
+        Index("idx_ats_accounts_domain", "domain"),
+        UniqueConstraint("domain", "email", name="uq_ats_domain_email"),
+    )
+
+    def __repr__(self) -> str:
+        return f"<ATSAccount domain={self.domain!r} email={self.email!r}>"

@@ -10,11 +10,13 @@ injection via malicious job postings.
 
 from __future__ import annotations
 
+import asyncio
 import re
 from dataclasses import dataclass
 
 import structlog
 from playwright.async_api import Page
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.agents.claude_client import ClaudeClient, FormField
 from src.api.schemas import UserProfile
@@ -299,6 +301,7 @@ async def process_external_apply(
     claude_client: ClaudeClient,
     min_salary: int | None = None,
     dry_run: bool = False,
+    session: AsyncSession | None = None,
 ) -> Result:
     """Process an external job application using DOM-based form detection.
 
@@ -339,6 +342,74 @@ async def process_external_apply(
 
     # Click through to the actual form (ATS landing pages)
     await _click_through_to_form(page, log)
+
+    # Detect if we're on a login/registration page instead of the application form
+    from src.agents.ats_registration import (
+        _extract_domain,
+        detect_page_type,
+        get_stored_account,
+        handle_google_oauth,
+        handle_login,
+        handle_registration,
+        store_account,
+        wait_for_verification_email,
+    )
+
+    page_text = await page.inner_text("body")
+    page_type = detect_page_type(page_text)
+    domain = _extract_domain(job_record.external_url or "")
+
+    if page_type == "google_oauth":
+        log.info("detected_google_oauth", domain=domain)
+        success = await handle_google_oauth(page)
+        if not success:
+            return Result(ok=False, error="Google OAuth flow failed", reason="oauth_failed")
+        if session:
+            await store_account(session, domain, profile.email or "", None, "google_oauth")
+
+    elif page_type == "login" and session and profile.email:
+        log.info("detected_login_page", domain=domain)
+        stored = await get_stored_account(session, domain, profile.email)
+        if stored and stored.password:
+            log.info("using_stored_credentials", domain=domain)
+            await handle_login(page, stored.email, stored.password)
+        elif stored and stored.auth_method == "google_oauth":
+            await handle_google_oauth(page)
+        else:
+            log.warning("no_stored_credentials", domain=domain)
+            return Result(
+                ok=False,
+                error=f"Login required but no stored credentials for {domain}",
+                reason="login_required",
+            )
+
+    elif page_type == "registration" and profile.email:
+        log.info("detected_registration_page", domain=domain)
+        success, password = await handle_registration(page, profile.email, profile.full_name)
+        if success and password and session:
+            await store_account(
+                session, domain, profile.email, password, "password", "auto-registered"
+            )
+            # Check if email verification is needed
+            new_page_text = await page.inner_text("body")
+            if "verify" in new_page_text.lower() or "check your email" in new_page_text.lower():
+                log.info("waiting_for_verification_email", domain=domain)
+                verify_url = await wait_for_verification_email(profile.email, domain)
+                if verify_url:
+                    await page.goto(verify_url, timeout=30000)
+                    await page.wait_for_timeout(3000)
+                else:
+                    return Result(
+                        ok=False,
+                        error="Email verification required but no link found",
+                        reason="verification_timeout",
+                    )
+        elif not success:
+            return Result(
+                ok=False,
+                error="Account registration failed",
+                reason="registration_failed",
+            )
 
     page_count = 0
 
@@ -777,7 +848,6 @@ async def _click_through_to_form(page: Page, log) -> None:
         page: The Playwright page after navigating to the external URL.
         log: Bound structlog logger.
     """
-    import asyncio
 
     await asyncio.sleep(2)  # Let the page render
 
