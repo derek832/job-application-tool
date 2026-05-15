@@ -211,6 +211,10 @@ function JobRow({ job }: { job: JobRecordOut }): React.JSX.Element {
             </a>
           )}
 
+          {job.application_notes && (
+            <ApplicationNotes notesJson={job.application_notes} />
+          )}
+
           <div className="flex items-center gap-3 text-xs text-gray-500">
             <span>Status: <span className="font-medium text-gray-700">{job.status}</span></span>
             {job.queue_reason && (
@@ -233,6 +237,33 @@ function EmptyState(): React.JSX.Element {
       </div>
       <p className="text-sm font-medium text-gray-900">No jobs found</p>
       <p className="text-xs text-gray-500 mt-1">Try adjusting your search or filters.</p>
+    </div>
+  );
+}
+
+function ApplicationNotes({ notesJson }: { notesJson: string }): React.JSX.Element {
+  let fields: Array<{ field: string; value: string }> = [];
+  try {
+    fields = JSON.parse(notesJson);
+  } catch {
+    return <></>;
+  }
+
+  if (!Array.isArray(fields) || fields.length === 0) return <></>;
+
+  return (
+    <div className="bg-green-50 rounded-lg p-3">
+      <p className="text-xs font-medium text-green-800 mb-2">
+        Application Submitted ({fields.length} fields filled)
+      </p>
+      <div className="space-y-1">
+        {fields.map((f, i) => (
+          <div key={i} className="text-xs">
+            <span className="text-green-700 font-medium">{f.field}:</span>{" "}
+            <span className="text-green-900">{f.value}</span>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
