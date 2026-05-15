@@ -263,7 +263,7 @@ async def run_pipeline(session: AsyncSession | None = None) -> None:
                         job_title=job.title,
                         company=job.company,
                         linkedin_url=job.linkedin_url,
-                        apply_type="easy_apply",
+                        apply_type=job.apply_type,
                     )
                     # Update the record with the extracted description
                     from src.db.job_repo import update_job_status
@@ -276,12 +276,15 @@ async def run_pipeline(session: AsyncSession | None = None) -> None:
                         record.description_text = job.description
                         record.status = "extracted"
                         record.extracted_at = datetime.now(UTC).isoformat()
+                        if job.external_url:
+                            record.external_url = job.external_url
 
                     logger.info(
                         "pipeline_job_discovered_and_extracted",
                         job_id=job.job_id,
                         title=job.title,
                         company=job.company,
+                        apply_type=job.apply_type,
                     )
                 except Exception as exc:
                     logger.error(

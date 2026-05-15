@@ -124,6 +124,8 @@ class DiscoveredJob:
     company: str
     description: str
     linkedin_url: str
+    apply_type: str = "easy_apply"  # "easy_apply" or "external_apply"
+    external_url: str | None = None
 
 
 async def discover_and_extract_jobs(
@@ -249,6 +251,38 @@ async def discover_and_extract_jobs(
                     logger.warning("discovery_no_description", job_id=job_id)
                     continue
 
+                # Detect apply type: Easy Apply vs External
+                apply_type = "easy_apply"
+                external_url = None
+
+                # LinkedIn shows "Easy Apply" button for in-platform applications
+                easy_apply_btn = await page.query_selector(
+                    "button.jobs-apply-button--top-card span:has-text('Easy Apply'), "
+                    "button[class*='jobs-apply-button'] span.artdeco-button__text, "
+                    "button[aria-label*='Easy Apply'], "
+                    "span[class*='jobs-apply-button--badge']"
+                )
+
+                if easy_apply_btn:
+                    btn_text = (await easy_apply_btn.inner_text()).strip().lower()
+                    if "easy apply" in btn_text:
+                        apply_type = "easy_apply"
+                    else:
+                        apply_type = "external_apply"
+                else:
+                    # No Easy Apply badge found — check for external apply link
+                    apply_type = "external_apply"
+
+                # Try to extract external URL from the Apply button's link
+                if apply_type == "external_apply":
+                    ext_link = await page.query_selector(
+                        "a[class*='jobs-apply-button'], "
+                        "a[data-tracking-control-name*='apply'], "
+                        "a.jobs-apply-button--top-card"
+                    )
+                    if ext_link:
+                        external_url = await ext_link.get_attribute("href")
+
                 all_discovered.append(
                     DiscoveredJob(
                         job_id=job_id,
@@ -256,6 +290,8 @@ async def discover_and_extract_jobs(
                         company=company,
                         description=description,
                         linkedin_url=f"https://www.linkedin.com/jobs/view/{job_id}",
+                        apply_type=apply_type,
+                        external_url=external_url,
                     )
                 )
 
@@ -265,6 +301,7 @@ async def discover_and_extract_jobs(
                     title=title,
                     company=company,
                     desc_len=len(description),
+                    apply_type=apply_type,
                 )
 
             except Exception as exc:
