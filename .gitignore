@@ -1,0 +1,37 @@
+# Secrets and local config
+.env
+*.db
+*.sqlite
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+.ruff_cache/
+htmlcov/
+.coverage
+
+# Node / Extension
+node_modules/
+extension/dist/
+extension/.vite/
+
+# Docker
+*.log
+
+# PDFs (generated artifacts)
+*.pdf
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+*.swp
