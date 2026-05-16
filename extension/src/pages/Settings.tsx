@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { getSettings, updateSettings, importLinkedInCookies, ApiError } from "../api/client";
+import { getSettings, updateSettings, ApiError } from "../api/client";
 import { saveToken, loadToken, getStorageType } from "../api/token-storage";
 import type { Settings as SettingsType } from "../api/client";
 
@@ -21,7 +21,6 @@ export function Settings(): React.JSX.Element {
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
   const [tokenSaved, setTokenSaved] = useState(false);
-  const [cloneStatus, setCloneStatus] = useState<string | null>(null);
 
   useEffect(() => {
     async function load() {
@@ -60,19 +59,6 @@ export function Settings(): React.JSX.Element {
       setError(
         `Token save failed (${getStorageType()}): ${e instanceof Error ? e.message : "Unknown error"}`
       );
-    }
-  }
-
-  async function handleCloneSession() {
-    setCloneStatus("cloning");
-    setError(null);
-    try {
-      const result = await importLinkedInCookies();
-      setCloneStatus(`✓ ${result.message}`);
-      setTimeout(() => setCloneStatus(null), 3000);
-    } catch (e) {
-      setError(e instanceof ApiError ? e.message : "Failed to clone LinkedIn session");
-      setCloneStatus(null);
     }
   }
 
@@ -143,25 +129,6 @@ export function Settings(): React.JSX.Element {
             {tokenSaved ? "✓" : "Save"}
           </button>
         </div>
-      </div>
-
-      {/* Clone LinkedIn Session */}
-      <div className="bg-white rounded-xl border border-gray-200 p-4 shadow-sm space-y-3">
-        <div>
-          <p className="text-sm font-medium text-gray-900">LinkedIn Session</p>
-          <p className="text-xs text-gray-500 mt-0.5">
-            Clone your LinkedIn cookies so the automator can browse jobs as you.
-            Make sure you're logged into LinkedIn in this browser.
-          </p>
-        </div>
-        <button
-          type="button"
-          onClick={handleCloneSession}
-          disabled={cloneStatus === "cloning"}
-          className="w-full px-3 py-2 text-sm font-medium text-white bg-green-600 rounded-lg hover:bg-green-700 disabled:opacity-50 transition-colors"
-        >
-          {cloneStatus === "cloning" ? "Cloning..." : cloneStatus ?? "Clone LinkedIn Session"}
-        </button>
       </div>
 
       {/* Server settings form */}

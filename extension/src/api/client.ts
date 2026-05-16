@@ -401,38 +401,6 @@ export async function markManuallyApplied(id: string): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
-// Session Management
-// ---------------------------------------------------------------------------
-
-export async function importLinkedInCookies(): Promise<{ imported: number; message: string }> {
-  // Get all LinkedIn cookies from multiple domain patterns
-  const [dotLinkedin, wwwLinkedin, linkedinNoDot] = await Promise.all([
-    chrome.cookies.getAll({ domain: ".linkedin.com" }),
-    chrome.cookies.getAll({ domain: "www.linkedin.com" }),
-    chrome.cookies.getAll({ domain: "linkedin.com" }),
-  ]);
-
-  // Deduplicate by name+domain+path
-  const seen = new Set<string>();
-  const cookies: chrome.cookies.Cookie[] = [];
-  for (const c of [...dotLinkedin, ...wwwLinkedin, ...linkedinNoDot]) {
-    const key = `${c.name}|${c.domain}|${c.path}`;
-    if (!seen.has(key)) {
-      seen.add(key);
-      cookies.push(c);
-    }
-  }
-
-  return request(
-    "/session/cookies",
-    z.object({ imported: z.number(), message: z.string() }),
-    {
-      method: "POST",
-      body: JSON.stringify({ cookies }),
-    }
-  );
-}
-
 // ---------------------------------------------------------------------------
 // Activity Logs
 // ---------------------------------------------------------------------------
