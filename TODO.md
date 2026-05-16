@@ -19,8 +19,8 @@
 ## Known Issues / Low Priority
 
 - [ ] **Company name selector fragile** — Works now but LinkedIn changes their DOM frequently. May need periodic updates to the CSS selectors.
-- [ ] **Property-based tests not written** — All 16 Hypothesis property tests from the spec are unimplemented (marked optional). Would increase confidence in edge cases for scoring, classification, and rate limiting.
 - [ ] **Integration tests not written** — End-to-end pipeline tests (Easy Apply happy path, External Apply, Human Queue flow, retry exhaustion) are missing.
+- [ ] **Update setup guide and steering files** — Out of date (references cookie cloning, old GDocs URL). Wait until closer to final.
 
 ## Completed ✓
 
