@@ -14,7 +14,6 @@
 - [ ] **Application response tracking** — Add statuses like "interview_scheduled" or "response_received" that you can manually set, plus tracking response rates over time.
 - [ ] **Application analytics dashboard** — Track applications over time, response rates, which job titles/companies convert to interviews.
 - [ ] **Salary range extraction** — Parse salary info from job descriptions when not in LinkedIn's structured data, use it for filtering.
-- [ ] **Remove stale features** — Remove LinkedIn browser cookie clone (CDP approach replaced it), remove unused session_routes endpoint, clean up dead code.
 
 ## Known Issues / Low Priority
 
@@ -24,6 +23,8 @@
 
 ## Completed ✓
 
+- [x] **Remove stale features** — Removed cookie clone endpoint, login_linkedin.py, linkedin_auth.py, extraction_stage.py, old discover_jobs function, and extension Clone Session UI. 666 lines of dead code removed.
+- [x] **Property-based tests** — All 16 Hypothesis tests implemented (100 examples each), covering URL construction, dedup, classification, SMS, rate limiting, persistence, field mapping, and more.
 - [x] **Fix tailoring stage async bug** — Added missing `await` on `send_sms` in notification and scoring stages.
 - [x] **Re-authorize Google Apps Script** — Redeployed with "Anyone" access, fixed `body.setText()` error with append+remove approach, added `follow_redirects=True` to httpx client.
 - [x] **Multiple search queries per cycle** — `search_queries` list field with UI in extension. Pipeline iterates all queries with randomized inter-query delays (10-20s).
