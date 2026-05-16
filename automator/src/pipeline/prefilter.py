@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 
 import structlog
 
@@ -175,3 +176,150 @@ async def generate_filter_keywords(
         logger.error("prefilter_keyword_generation_failed", error=str(exc))
 
     return []
+
+
+# ---------------------------------------------------------------------------
+# Salary extraction and filtering
+# ---------------------------------------------------------------------------
+
+# Regex patterns for salary extraction from job descriptions
+_SALARY_PATTERNS: list[re.Pattern[str]] = [
+    # $120,000 - $150,000 or $120000-$150000
+    re.compile(
+        r"\$\s*([\d,]+)\s*(?:[-–—to]+)\s*\$\s*([\d,]+)\s*(?:per\s*year|\/yr|annually|a\s*year)?",
+        re.IGNORECASE,
+    ),
+    # $120K - $150K or $120k-$150k or $115K/yr - $125K/yr
+    re.compile(
+        r"\$\s*(\d+)\s*[kK]\s*(?:\/yr|\/year)?\s*[-–—to]+\s*\$?\s*(\d+)\s*[kK]\s*(?:\/yr|\/year|per\s*year|annually)?",
+        re.IGNORECASE,
+    ),
+    # $60/hr - $75/hr or $60-$75 per hour
+    re.compile(
+        r"\$\s*([\d.]+)\s*(?:\/hr|\/hour)?\s*[-–—to]+\s*\$?\s*([\d.]+)\s*(?:per\s*hour|\/hr|\/hour|hourly|an?\s*hour)",
+        re.IGNORECASE,
+    ),
+    # 120,000 - 150,000 (no dollar sign but with range)
+    re.compile(
+        r"(\d{2,3},\d{3})\s*[-–—to]+\s*(\d{2,3},\d{3})\s*(?:per\s*year|\/yr|annually)?",
+        re.IGNORECASE,
+    ),
+    # Single salary: $120,000 or $120K
+    re.compile(
+        r"\$\s*([\d,]+)\s*(?:per\s*year|\/yr|annually|a\s*year)",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\$\s*(\d+)\s*[kK]\s*(?:per\s*year|\/yr|annually)?",
+        re.IGNORECASE,
+    ),
+]
+
+HOURS_PER_YEAR = 2080
+
+
+def extract_salary_range(text: str) -> tuple[int | None, int | None]:
+    """Extract salary range from job description or title text.
+
+    Parses various salary formats and normalizes to annual amounts.
+    Hourly rates are converted to annual (×2080 hours).
+
+    Args:
+        text: The job description or card subtitle text.
+
+    Returns:
+        Tuple of (min_salary, max_salary) as integers, or (None, None)
+        if no salary information is found.
+    """
+    if not text:
+        return None, None
+
+    # Try hourly pattern first (needs conversion)
+    hourly_match = _SALARY_PATTERNS[2].search(text)
+    if hourly_match:
+        low = float(hourly_match.group(1))
+        high = float(hourly_match.group(2))
+        return int(low * HOURS_PER_YEAR), int(high * HOURS_PER_YEAR)
+
+    # Try range patterns (annual)
+    for pattern in [_SALARY_PATTERNS[0], _SALARY_PATTERNS[3]]:
+        match = pattern.search(text)
+        if match:
+            low = int(match.group(1).replace(",", ""))
+            high = int(match.group(2).replace(",", ""))
+            # Sanity check: if values look like they're in thousands already
+            if low < 1000:
+                low *= 1000
+            if high < 1000:
+                high *= 1000
+            return low, high
+
+    # Try K notation range
+    k_match = _SALARY_PATTERNS[1].search(text)
+    if k_match:
+        low = int(k_match.group(1)) * 1000
+        high = int(k_match.group(2)) * 1000
+        return low, high
+
+    # Try single salary with /yr
+    single_match = _SALARY_PATTERNS[4].search(text)
+    if single_match:
+        val = int(single_match.group(1).replace(",", ""))
+        if val < 1000:
+            val *= 1000
+        return val, val
+
+    # Single K notation
+    single_k = _SALARY_PATTERNS[5].search(text)
+    if single_k:
+        val = int(single_k.group(1)) * 1000
+        return val, val
+
+    return None, None
+
+
+def check_salary_filter(
+    job_record: JobRecord,
+    min_salary: int | None,
+) -> bool:
+    """Check if a job's salary range meets the minimum salary requirement.
+
+    Extracts salary from the job description and compares the maximum
+    offered salary against the user's minimum requirement. If the max
+    salary is below the minimum, the job is filtered out.
+
+    Args:
+        job_record: The job record with description_text.
+        min_salary: The user's minimum acceptable salary, or None to skip.
+
+    Returns:
+        True if the job passes the salary filter (should proceed to scoring).
+        False if the salary is definitively below the minimum.
+    """
+    if min_salary is None:
+        return True  # No minimum set — pass everything
+
+    # Try to extract salary from description
+    text = job_record.description_text or ""
+    sal_min, sal_max = extract_salary_range(text)
+
+    if sal_min is None and sal_max is None:
+        return True  # No salary info found — can't filter, pass through
+
+    # Use the max of the range for comparison (give benefit of the doubt)
+    max_offered = sal_max or sal_min
+    if max_offered is None:
+        return True
+
+    # Filter out if the max offered is below the user's minimum
+    if max_offered < min_salary:
+        logger.info(
+            "prefilter_salary_excluded",
+            job_id=job_record.id,
+            title=job_record.job_title,
+            salary_range=f"{sal_min}-{sal_max}",
+            min_salary=min_salary,
+        )
+        return False
+
+    return True
