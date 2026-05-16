@@ -13,7 +13,7 @@
 - [x] **Mark jobs as applied on LinkedIn** — After a successful external application submission, navigate back to the LinkedIn listing and click "Mark as applied" so LinkedIn's tracking stays in sync.
 - [ ] **Application response tracking** — Add statuses like "interview_scheduled" or "response_received" that you can manually set, plus tracking response rates over time.
 - [ ] **Application analytics dashboard** — Track applications over time, response rates, which job titles/companies convert to interviews.
-- [ ] **Salary range extraction** — Parse salary info from job descriptions when not in LinkedIn's structured data, use it for filtering.
+- [x] **Salary range extraction** — Parse salary info from job descriptions ($120K-$150K, $60/hr, etc.), convert hourly to annual, filter out jobs below min_salary before scoring.
 
 ## Known Issues / Low Priority
 
