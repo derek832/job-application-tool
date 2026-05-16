@@ -13,6 +13,7 @@ export function Settings(): React.JSX.Element {
     good_fit_threshold: 70,
     stretch_threshold: 50,
     external_apply_threshold: 80,
+    skip_viewed_jobs: true,
     backup_dir: null,
     dry_run: false,
   });
@@ -233,6 +234,27 @@ export function Settings(): React.JSX.Element {
             }`}
           >
             {form.dry_run ? "ON" : "OFF"}
+          </button>
+        </div>
+
+        {/* Skip Viewed Jobs toggle */}
+        <div className="flex items-center justify-between bg-white rounded-lg border border-gray-200 px-4 py-3">
+          <div>
+            <p className="text-sm font-medium text-gray-900">Skip Viewed Jobs</p>
+            <p className="text-xs text-gray-500 mt-0.5">
+              Skip jobs you've already viewed on LinkedIn during discovery.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => setForm((f) => ({ ...f, skip_viewed_jobs: !f.skip_viewed_jobs }))}
+            className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-colors ${
+              form.skip_viewed_jobs
+                ? "bg-blue-600 text-white"
+                : "bg-gray-200 text-gray-700"
+            }`}
+          >
+            {form.skip_viewed_jobs ? "ON" : "OFF"}
           </button>
         </div>
 

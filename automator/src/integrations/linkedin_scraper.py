@@ -133,6 +133,7 @@ async def discover_and_extract_jobs(
     config: SearchConfig,
     session: AsyncSession,
     max_pages: int = 5,
+    skip_viewed: bool = True,
 ) -> list[DiscoveredJob]:
     """Discover jobs and extract descriptions from the search results page.
 
@@ -195,6 +196,17 @@ async def discover_and_extract_jobs(
                 if job_id in seen_ids:
                     continue
                 seen_ids.add(job_id)
+
+                # Skip jobs marked as "Viewed" if the setting is enabled
+                if skip_viewed:
+                    viewed_indicator = await card.query_selector(
+                        "span:has-text('Viewed'), "
+                        "li[class*='viewed'], "
+                        "span[class*='job-card-container__footer-item']:has-text('Viewed')"
+                    )
+                    if viewed_indicator:
+                        logger.debug("discovery_skipped_viewed", job_id=job_id)
+                        continue
 
                 # Click the card to load the description in the right panel
                 await card.click()
@@ -539,3 +551,61 @@ async def extract_description(page: Page, job_record: JobRecord) -> str:
         ),
         job_id=job_id,
     )
+
+
+async def mark_as_applied_on_linkedin(page: Page, linkedin_url: str) -> bool:
+    """Navigate to a LinkedIn job listing and mark it as applied.
+
+    After a successful external application, this navigates to the LinkedIn
+    job page and clicks the "Mark as applied" option so LinkedIn's tracking
+    stays in sync with the automator's state.
+
+    Args:
+        page: A Playwright Page instance.
+        linkedin_url: The LinkedIn job URL to mark.
+
+    Returns:
+        True if successfully marked, False otherwise.
+    """
+    try:
+        await page.goto(linkedin_url, timeout=30000)
+        await _human_delay(2.0, 4.0)
+
+        # Look for the "..." or overflow menu button on the job page
+        overflow_btn = await page.query_selector(
+            "button[aria-label*='More actions'], "
+            "button[aria-label*='more options'], "
+            "button[class*='jobs-save-button'] + button, "
+            "button[class*='artdeco-dropdown__trigger']"
+        )
+
+        if overflow_btn and await overflow_btn.is_visible():
+            await overflow_btn.click()
+            await _human_delay(0.5, 1.5)
+
+            # Click "Mark as applied" in the dropdown
+            mark_btn = await page.query_selector(
+                "div[role='menuitem']:has-text('Mark as applied'), "
+                "li:has-text('Mark as applied'), "
+                "span:has-text('Mark as applied')"
+            )
+            if mark_btn:
+                await mark_btn.click()
+                await _human_delay(1.0, 2.0)
+                logger.info("linkedin_marked_as_applied", url=linkedin_url)
+                return True
+
+        # Alternative: some pages show a direct "Mark as applied" button
+        direct_btn = await page.query_selector("button:has-text('Mark as applied')")
+        if direct_btn and await direct_btn.is_visible():
+            await direct_btn.click()
+            await _human_delay(1.0, 2.0)
+            logger.info("linkedin_marked_as_applied", url=linkedin_url)
+            return True
+
+        logger.warning("linkedin_mark_applied_button_not_found", url=linkedin_url)
+        return False
+
+    except Exception as exc:
+        logger.warning("linkedin_mark_applied_failed", url=linkedin_url, error=str(exc))
+        return False

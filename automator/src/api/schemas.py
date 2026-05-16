@@ -155,6 +155,7 @@ class Settings(BaseModel):
     good_fit_threshold: int = 75
     stretch_threshold: int = 50
     external_apply_threshold: int = 80
+    skip_viewed_jobs: bool = True
     backup_dir: str | None = None
     dry_run: bool = True
 
@@ -438,5 +439,6 @@ class SettingsUpdate(BaseModel):
     good_fit_threshold: int | None = None
     stretch_threshold: int | None = None
     external_apply_threshold: int | None = None
+    skip_viewed_jobs: bool | None = None
     backup_dir: str | None = None
     dry_run: bool | None = None
