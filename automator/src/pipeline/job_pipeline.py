@@ -346,6 +346,20 @@ async def run_pipeline(session: AsyncSession | None = None) -> None:
                         )
                         continue
 
+                    # Pre-filter: check salary range against minimum
+                    from src.pipeline.prefilter import check_salary_filter
+
+                    if not check_salary_filter(job_record, goals_profile.min_salary):
+                        from src.db.job_repo import update_job_status
+
+                        await update_job_status(
+                            session,
+                            job_record.id,
+                            "skipped",
+                            reason="Pre-filter: salary below minimum",
+                        )
+                        continue
+
                     try:
                         await run_scoring(
                             job_record=job_record,
