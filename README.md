@@ -14,23 +14,25 @@ Every weekday, this tool:
 4. Texts you about borderline jobs so you can decide
 5. Skips jobs that aren't a match
 
-You control everything through a small Chrome Extension — a little panel in your browser where you can see what's happening, review jobs, and change your preferences.
+You control everything through a web app at `http://127.0.0.1:3000` — a local dashboard in your browser where you can see what's happening, review jobs, and change your preferences.
 
 ---
 
 ## How It Works
 
-The tool runs inside a "container" on your computer using a program called Docker. Think of it like a tiny computer-inside-your-computer that does all the work. Nothing is shared with the outside world except the specific services you connect (AI scoring, Gmail for texts, Google Docs for your resume).
+The tool runs inside Docker on your computer. Two containers work together: one does all the job-hunting work (the automator), and one serves the web interface you interact with (nginx). Nothing is shared with the outside world except the specific services you connect (AI scoring, Gmail for texts, Google Docs for your resume).
 
 ```
 Your Computer
-├── Chrome Extension (your control panel)
-└── Docker Container (the worker)
-    ├── Browses LinkedIn for jobs
-    ├── Asks AI to score each job
-    ├── Edits your resume in Google Docs
-    ├── Applies to jobs automatically
-    └── Texts you when it needs your input
+├── Browser → http://127.0.0.1:3000 (your control panel)
+└── Docker Compose
+    ├── Frontend (nginx) — serves the web app + proxies API requests
+    └── Automator (FastAPI)
+        ├── Browses LinkedIn for jobs
+        ├── Asks AI to score each job
+        ├── Edits your resume in Google Docs
+        ├── Applies to jobs automatically
+        └── Texts you when it needs your input
 ```
 
 ---
@@ -44,6 +46,13 @@ Your Computer
 ---
 
 ## Getting Started
+
+### Prerequisites
+
+- [Docker Desktop](https://www.docker.com/products/docker-desktop/) installed and running
+- A modern web browser (Chrome, Firefox, Edge, Safari — any will work)
+
+No Node.js installation is needed. No browser extensions are needed. The web app is built entirely inside Docker.
 
 ### Option A: Let Kiro Do It (Recommended)
 
@@ -64,6 +73,24 @@ SETUP_GUIDE.md
 ```
 
 It assumes zero technical knowledge and explains every concept along the way.
+
+---
+
+## Starting the Tool
+
+One command starts everything — both the backend automator and the web interface:
+
+```bash
+docker compose up -d
+```
+
+Then open your browser to:
+
+```
+http://127.0.0.1:3000
+```
+
+On your first visit, you'll be prompted to enter your API token. This is the same value as `API_TOKEN` in your `.env` file.
 
 ---
 
@@ -100,7 +127,8 @@ ATS parsers ignore formatting entirely — they only read the text. So even if b
 | Start the tool | `docker compose up -d` |
 | Stop the tool | `docker compose down` |
 | See what it's doing | `docker compose logs automator --follow` |
-| Rebuild after updates | `docker compose build automator` then `docker compose up -d` |
+| See frontend logs | `docker compose logs frontend --follow` |
+| Rebuild after updates | `docker compose build` then `docker compose up -d` |
 
 Or just tell Kiro: "start the tool", "stop the tool", "show me the logs."
 
