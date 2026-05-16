@@ -9,8 +9,8 @@
 ## Features to Add
 
 - [ ] **Replace SMS with ntfy.sh push notifications** — Verizon is shutting down vtext.com email-to-SMS by 03/2027 (already degraded). Switch to ntfy.sh for instant push notifications. Free, open source, iOS/Android app, custom sounds per topic, no account needed. Keep SMS as optional fallback for other carriers.
-- [ ] **Skip already-viewed jobs in discovery** — During scraping, detect and skip job cards that LinkedIn marks as "Viewed" to avoid re-processing jobs the user has already seen manually.
-- [ ] **Mark jobs as applied on LinkedIn** — After a successful external application submission, navigate back to the LinkedIn listing and click "Mark as applied" so LinkedIn's tracking stays in sync.
+- [x] **Skip already-viewed jobs in discovery** — During scraping, detect and skip job cards that LinkedIn marks as "Viewed" to avoid re-processing jobs the user has already seen manually. Configurable toggle in Settings (default: ON).
+- [x] **Mark jobs as applied on LinkedIn** — After a successful external application submission, navigate back to the LinkedIn listing and click "Mark as applied" so LinkedIn's tracking stays in sync.
 - [ ] **Application response tracking** — Add statuses like "interview_scheduled" or "response_received" that you can manually set, plus tracking response rates over time.
 - [ ] **Application analytics dashboard** — Track applications over time, response rates, which job titles/companies convert to interviews.
 - [ ] **Salary range extraction** — Parse salary info from job descriptions when not in LinkedIn's structured data, use it for filtering.
