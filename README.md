@@ -81,6 +81,18 @@ You'll get text messages when:
 
 ---
 
+## Resume Formatting Note
+
+The ATS optimization works by making targeted text replacements in a copy of your Google Doc resume. Your original document is never modified. However, there's one thing to be aware of:
+
+**Bold text boundaries:** If your resume has bold text that transitions to non-bold mid-line (e.g., "**Security Operations:** Vulnerability Management, Incident Response"), and Claude tries to replace text that spans that boundary, the replacement may inherit incorrect bold formatting in the exported PDF.
+
+**How to avoid this:** Keep bold formatting limited to standalone elements (section headers, category labels before a colon). Make sure the text *after* a bold label is consistently non-bold. This way, replacements only happen within uniformly-formatted text and the PDF looks correct.
+
+ATS parsers ignore formatting entirely — they only read the text. So even if bold bleeds slightly, it won't affect your application's chances. It's purely a visual issue in the PDF.
+
+---
+
 ## Quick Commands
 
 | What | Command |
