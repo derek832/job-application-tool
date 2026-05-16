@@ -67,7 +67,7 @@ def setup_scheduler(app: FastAPI, scheduled_time: str | None = None) -> AsyncIOS
     scheduler.add_job(
         _run_pipeline_wrapper,
         trigger=CronTrigger(
-            day_of_week="mon-fri",
+            day_of_week="mon-sun",
             hour="8-20",
             minute=0,
             timezone=EASTERN_TZ,
