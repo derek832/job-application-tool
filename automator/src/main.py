@@ -53,10 +53,19 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     await init_db(engine)
 
     # Open a session to check/generate the API token
+    # If API_TOKEN env var is set, use it (and persist to DB). Otherwise use DB value or generate.
     async for session in get_session():
+        env_token = os.environ.get("API_TOKEN", "").strip()
         api_token = await get_config(session, "api_token")
 
-        if api_token is None:
+        if env_token:
+            # Env var takes precedence — sync to DB if different
+            if api_token != env_token:
+                await set_config(session, "api_token", env_token)
+                await session.commit()
+            api_token = env_token
+            logger.info("api_token_from_env", token=api_token)
+        elif api_token is None:
             api_token = secrets.token_hex(32)
             await set_config(session, "api_token", api_token)
             await session.commit()

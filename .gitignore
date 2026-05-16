@@ -28,10 +28,11 @@ build/
 htmlcov/
 .coverage
 
-# Node / Extension
+# Node / Web App
 node_modules/
-extension/dist/
-extension/.vite/
+webapp/dist/
+webapp/.vite/
+*.tsbuildinfo
 
 # Docker
 *.log

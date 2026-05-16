@@ -6,9 +6,9 @@ services:
     image: job-application-tool-automator
     extra_hosts:
       - "host.docker.internal:host-gateway"
-    ports:
-      # Bind exclusively to localhost — never expose to the network
-      - "127.0.0.1:7432:7432"
+    # Port no longer exposed to host — only accessible within Docker network
+    expose:
+      - "7432"
     volumes:
       - app-data:/app/data
     environment:
@@ -24,6 +24,19 @@ services:
     restart: unless-stopped
     # Run as non-root (appuser defined in Dockerfile)
     user: appuser
+
+  frontend:
+    build:
+      context: ./webapp
+      dockerfile: Dockerfile
+    image: job-application-tool-frontend
+    ports:
+      - "127.0.0.1:3000:3000"
+    environment:
+      - API_TOKEN=${API_TOKEN}
+    depends_on:
+      - automator
+    restart: unless-stopped
 
 volumes:
   app-data:
