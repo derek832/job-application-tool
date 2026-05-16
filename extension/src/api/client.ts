@@ -138,6 +138,7 @@ export const SettingsSchema = z.object({
   good_fit_threshold: z.number().int(),
   stretch_threshold: z.number().int(),
   external_apply_threshold: z.number().int(),
+  skip_viewed_jobs: z.boolean(),
   backup_dir: z.string().nullable(),
   dry_run: z.boolean(),
 });
@@ -320,11 +321,12 @@ export async function updateUserProfile(data: UserProfile): Promise<UserProfile>
 
 const SettingsSchemaLenient = SettingsSchema.extend({
   external_apply_threshold: z.number().int().optional(),
+  skip_viewed_jobs: z.boolean().optional(),
 });
 
 export async function getSettings(): Promise<Settings> {
   const data = await request("/config/settings", SettingsSchemaLenient);
-  return { ...data, external_apply_threshold: data.external_apply_threshold ?? 80 };
+  return { ...data, external_apply_threshold: data.external_apply_threshold ?? 80, skip_viewed_jobs: data.skip_viewed_jobs ?? true };
 }
 
 export async function updateSettings(data: Partial<Settings>): Promise<Settings> {
@@ -332,7 +334,7 @@ export async function updateSettings(data: Partial<Settings>): Promise<Settings>
     method: "PUT",
     body: JSON.stringify(data),
   });
-  return { ...result, external_apply_threshold: result.external_apply_threshold ?? 80 };
+  return { ...result, external_apply_threshold: result.external_apply_threshold ?? 80, skip_viewed_jobs: result.skip_viewed_jobs ?? true };
 }
 
 // ---------------------------------------------------------------------------

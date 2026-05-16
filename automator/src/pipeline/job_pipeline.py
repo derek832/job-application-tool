@@ -229,6 +229,7 @@ async def run_pipeline(session: AsyncSession | None = None) -> None:
                     config=query_config,
                     session=session,
                     max_pages=5,
+                    skip_viewed=settings.skip_viewed_jobs,
                 )
                 discovered.extend(query_results)
                 logger.info(
@@ -459,6 +460,12 @@ async def run_pipeline(session: AsyncSession | None = None) -> None:
                                     "applied",
                                     reason="External apply submitted via Vision Agent",
                                 )
+                                # Mark as applied on LinkedIn
+                                from src.integrations.linkedin_scraper import (
+                                    mark_as_applied_on_linkedin,
+                                )
+
+                                await mark_as_applied_on_linkedin(page, job_record.linkedin_url)
                             else:
                                 from src.db.job_repo import update_job_status
 
