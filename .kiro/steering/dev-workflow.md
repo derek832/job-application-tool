@@ -163,6 +163,7 @@ Before committing any change, verify all of the following pass:
 - [ ] `npm run lint` — zero ESLint warnings
 - [ ] `npm audit --audit-level=moderate` — no moderate+ CVEs
 - [ ] No `.env`, `*.db`, or `*.pdf` files staged for commit
+- [ ] Update `TODO.md` — mark completed features as done, move to Completed section
 
 ## Testing Approach
 
