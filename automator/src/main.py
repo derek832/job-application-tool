@@ -22,7 +22,6 @@ from src.api.config_routes import router as config_router
 from src.api.job_routes import router as job_router
 from src.api.log_routes import router as log_router
 from src.api.queue_routes import router as queue_router
-from src.api.session_routes import router as session_router
 from src.api.system_routes import router as system_router
 from src.db.config_repo import get_config, set_config
 from src.db.database import build_engine, get_session, init_db
@@ -145,7 +144,6 @@ app.include_router(config_router)
 app.include_router(job_router)
 app.include_router(log_router)
 app.include_router(queue_router)
-app.include_router(session_router)
 
 
 if __name__ == "__main__":
