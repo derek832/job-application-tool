@@ -47,14 +47,18 @@ class TestRunBackup:
     """Tests for run_backup function."""
 
     def test_backup_creates_file_with_datestamp(
-        self, tmp_path: Path, fake_db: Path, settings_with_backup_dir: Settings
+        self, tmp_path: Path, fake_db: Path
     ) -> None:
         """Backup creates a file named state_YYYY-MM-DD.db in the backup dir."""
-        with patch("src.scheduler.backup_job._DEFAULT_DB_PATH", fake_db):
-            run_backup(settings_with_backup_dir)
+        backup_dir = tmp_path / "backups"
+        with (
+            patch("src.scheduler.backup_job._DEFAULT_DB_PATH", fake_db),
+            patch("src.scheduler.backup_job._DEFAULT_BACKUP_DIR", backup_dir),
+        ):
+            run_backup()
 
         today = date.today().isoformat()
-        expected_file = Path(settings_with_backup_dir.backup_dir) / f"state_{today}.db"  # type: ignore[arg-type]
+        expected_file = backup_dir / f"state_{today}.db"
         assert expected_file.exists()
         assert expected_file.read_text() == "fake database content"
 
@@ -63,16 +67,18 @@ class TestRunBackup:
     ) -> None:
         """Backup creates the backup directory if it does not exist."""
         backup_dir = tmp_path / "nested" / "backup" / "dir"
-        settings = Settings(backup_dir=str(backup_dir))
 
-        with patch("src.scheduler.backup_job._DEFAULT_DB_PATH", fake_db):
-            run_backup(settings)
+        with (
+            patch("src.scheduler.backup_job._DEFAULT_DB_PATH", fake_db),
+            patch("src.scheduler.backup_job._DEFAULT_BACKUP_DIR", backup_dir),
+        ):
+            run_backup()
 
         assert backup_dir.exists()
         assert any(backup_dir.iterdir())
 
     def test_backup_uses_default_dir_when_not_configured(
-        self, tmp_path: Path, fake_db: Path, settings_without_backup_dir: Settings
+        self, tmp_path: Path, fake_db: Path
     ) -> None:
         """Backup falls back to data/backups when backup_dir is None."""
         default_backup_dir = tmp_path / "data" / "backups"
@@ -81,33 +87,40 @@ class TestRunBackup:
             patch("src.scheduler.backup_job._DEFAULT_DB_PATH", fake_db),
             patch("src.scheduler.backup_job._DEFAULT_BACKUP_DIR", default_backup_dir),
         ):
-            run_backup(settings_without_backup_dir)
+            run_backup()
 
         today = date.today().isoformat()
         expected_file = default_backup_dir / f"state_{today}.db"
         assert expected_file.exists()
 
     def test_backup_skipped_when_db_missing(
-        self, tmp_path: Path, settings_with_backup_dir: Settings
+        self, tmp_path: Path
     ) -> None:
         """Backup is skipped gracefully when the database file does not exist."""
         nonexistent_db = tmp_path / "nonexistent.db"
+        backup_dir = tmp_path / "backups"
 
-        with patch("src.scheduler.backup_job._DEFAULT_DB_PATH", nonexistent_db):
-            run_backup(settings_with_backup_dir)
+        with (
+            patch("src.scheduler.backup_job._DEFAULT_DB_PATH", nonexistent_db),
+            patch("src.scheduler.backup_job._DEFAULT_BACKUP_DIR", backup_dir),
+        ):
+            run_backup()
 
-        backup_dir = Path(settings_with_backup_dir.backup_dir)  # type: ignore[arg-type]
         assert not backup_dir.exists() or not any(backup_dir.iterdir())
 
     def test_backup_preserves_file_content(
-        self, tmp_path: Path, fake_db: Path, settings_with_backup_dir: Settings
+        self, tmp_path: Path, fake_db: Path
     ) -> None:
         """Backup file content matches the original database file."""
-        with patch("src.scheduler.backup_job._DEFAULT_DB_PATH", fake_db):
-            run_backup(settings_with_backup_dir)
+        backup_dir = tmp_path / "backups"
+        with (
+            patch("src.scheduler.backup_job._DEFAULT_DB_PATH", fake_db),
+            patch("src.scheduler.backup_job._DEFAULT_BACKUP_DIR", backup_dir),
+        ):
+            run_backup()
 
         today = date.today().isoformat()
-        backup_file = Path(settings_with_backup_dir.backup_dir) / f"state_{today}.db"  # type: ignore[arg-type]
+        backup_file = backup_dir / f"state_{today}.db"
         assert backup_file.read_bytes() == fake_db.read_bytes()
 
 

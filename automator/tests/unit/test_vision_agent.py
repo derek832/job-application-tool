@@ -113,7 +113,7 @@ class TestMapFieldsToProfile:
             FormField(field_id="f2", label="Email", field_type="text"),
             FormField(field_id="f3", label="Phone", field_type="text"),
         ]
-        mapped, unmapped, salary_missing = map_fields_to_profile(fields, profile, min_salary=80000)
+        mapped, unmapped, _file_fields, salary_missing = map_fields_to_profile(fields, profile, min_salary=80000)
         assert mapped == {
             "f1": "John Doe",
             "f2": "john@example.com",
@@ -128,7 +128,7 @@ class TestMapFieldsToProfile:
                 field_id="f1", label="Full Name", field_type="text", suggested_value="Jane Smith"
             ),
         ]
-        mapped, unmapped, salary_missing = map_fields_to_profile(fields, profile, min_salary=None)
+        mapped, unmapped, _file_fields, salary_missing = map_fields_to_profile(fields, profile, min_salary=None)
         assert mapped == {"f1": "Jane Smith"}
         assert unmapped == []
 
@@ -136,7 +136,7 @@ class TestMapFieldsToProfile:
         fields = [
             FormField(field_id="f1", label="Salary Expectation", field_type="text"),
         ]
-        mapped, unmapped, salary_missing = map_fields_to_profile(fields, profile, min_salary=90000)
+        mapped, unmapped, _file_fields, salary_missing = map_fields_to_profile(fields, profile, min_salary=90000)
         assert mapped == {"f1": "90000"}
         assert salary_missing is False
 
@@ -144,7 +144,7 @@ class TestMapFieldsToProfile:
         fields = [
             FormField(field_id="f1", label="Salary Expectation", field_type="text"),
         ]
-        mapped, unmapped, salary_missing = map_fields_to_profile(fields, profile, min_salary=None)
+        mapped, unmapped, _file_fields, salary_missing = map_fields_to_profile(fields, profile, min_salary=None)
         assert "f1" not in mapped
         assert salary_missing is True
 
@@ -152,7 +152,7 @@ class TestMapFieldsToProfile:
         fields = [
             FormField(field_id="f1", label="Favorite Color", field_type="text"),
         ]
-        mapped, unmapped, salary_missing = map_fields_to_profile(fields, profile, min_salary=None)
+        mapped, unmapped, _file_fields, salary_missing = map_fields_to_profile(fields, profile, min_salary=None)
         assert mapped == {}
         assert len(unmapped) == 1
         assert unmapped[0].label == "Favorite Color"
@@ -161,7 +161,7 @@ class TestMapFieldsToProfile:
         fields = [
             FormField(field_id="f1", label="Years of Experience", field_type="text"),
         ]
-        mapped, unmapped, salary_missing = map_fields_to_profile(fields, profile, min_salary=None)
+        mapped, unmapped, _file_fields, salary_missing = map_fields_to_profile(fields, profile, min_salary=None)
         assert mapped == {"f1": "5"}
         assert unmapped == []
 
@@ -169,14 +169,14 @@ class TestMapFieldsToProfile:
         fields = [
             FormField(field_id="f1", label="City", field_type="text"),
         ]
-        mapped, unmapped, salary_missing = map_fields_to_profile(fields, profile, min_salary=None)
+        mapped, unmapped, _file_fields, salary_missing = map_fields_to_profile(fields, profile, min_salary=None)
         assert mapped == {"f1": "New York, NY"}
 
     def test_maps_work_auth_variants(self, profile: UserProfile) -> None:
         fields = [
             FormField(field_id="f1", label="Work Authorization", field_type="text"),
         ]
-        mapped, unmapped, salary_missing = map_fields_to_profile(fields, profile, min_salary=None)
+        mapped, unmapped, _file_fields, salary_missing = map_fields_to_profile(fields, profile, min_salary=None)
         assert mapped == {"f1": "US Citizen"}
 
 
@@ -246,13 +246,35 @@ class TestProcessExternalApply:
     @pytest.fixture
     def mock_page(self) -> AsyncMock:
         page = AsyncMock(
-            spec=["goto", "screenshot", "fill", "query_selector", "wait_for_load_state"]
+            spec=["goto", "screenshot", "fill", "query_selector", "wait_for_load_state", "inner_text", "evaluate", "select_option", "keyboard"]
         )
         page.goto = AsyncMock()
         page.screenshot = AsyncMock(return_value=b"fake_screenshot_bytes")
         page.fill = AsyncMock()
-        page.query_selector = AsyncMock(return_value=None)
         page.wait_for_load_state = AsyncMock()
+        page.inner_text = AsyncMock(return_value="Apply for this position")
+        page.evaluate = AsyncMock(return_value=[])
+        page.select_option = AsyncMock()
+        page.keyboard = AsyncMock()
+
+        # Default query_selector: returns a submit button for submit selectors, None for next button
+        submit_btn = AsyncMock()
+        submit_btn.click = AsyncMock()
+        submit_btn.is_visible = AsyncMock(return_value=True)
+
+        async def smart_query_selector(selector):
+            # The "Next" button selector contains "Next" and "Continue"
+            if "Next" in selector or "Continue" in selector:
+                return None  # No next button - single page form
+            # The submit button selector contains "Submit" or "Apply"
+            if "Submit" in selector or "submit" in selector:
+                return submit_btn
+            # Apply button detection on landing page
+            if "Apply" in selector:
+                return submit_btn
+            return None
+
+        page.query_selector = AsyncMock(side_effect=smart_query_selector)
         return page
 
     @pytest.fixture
@@ -274,12 +296,11 @@ class TestProcessExternalApply:
         mock_page: AsyncMock,
         mock_claude: AsyncMock,
     ) -> None:
-        # Set up submit button
-        submit_btn = AsyncMock()
-        submit_btn.click = AsyncMock()
-
-        # First query_selector call for "Next" returns None, second for "Submit" returns button
-        mock_page.query_selector = AsyncMock(side_effect=[None, submit_btn])
+        # Provide DOM fields that can be mapped to profile
+        mock_page.evaluate = AsyncMock(return_value=[
+            {"label": "Full Name", "type": "text", "selector": "#name", "id": "name", "name": "name", "tag": "input", "value": ""},
+            {"label": "Email", "type": "email", "selector": "#email", "id": "email", "name": "email", "tag": "input", "value": ""},
+        ])
 
         result = await process_external_apply(
             job_record=job_record,
@@ -292,8 +313,6 @@ class TestProcessExternalApply:
         assert result.ok is True
         assert result.error is None
         mock_page.goto.assert_called_once()
-        mock_page.screenshot.assert_called_once()
-        mock_claude.identify_form_fields.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_no_external_url(
@@ -332,10 +351,12 @@ class TestProcessExternalApply:
         mock_page: AsyncMock,
         mock_claude: AsyncMock,
     ) -> None:
-        mock_claude.identify_form_fields.return_value = [
-            FormField(field_id="recaptcha", label="Complete the CAPTCHA", field_type="checkbox"),
-            FormField(field_id="email", label="Email", field_type="text"),
-        ]
+        # Provide DOM fields so the code proceeds past the "no fields" check
+        mock_page.evaluate = AsyncMock(return_value=[
+            {"label": "Email", "type": "text", "selector": "#email", "id": "email", "name": "email", "tag": "input", "value": ""},
+        ])
+        # inner_text returns text containing CAPTCHA indicators
+        mock_page.inner_text = AsyncMock(return_value="Please complete the reCAPTCHA challenge to continue")
 
         result = await process_external_apply(
             job_record=job_record,
@@ -348,17 +369,19 @@ class TestProcessExternalApply:
         assert result.reason == "captcha_detected"
 
     @pytest.mark.asyncio
-    async def test_unrecognized_field_escalation(
+    async def test_unrecognized_field_still_submits(
         self,
         job_record: JobRecord,
         profile: UserProfile,
         mock_page: AsyncMock,
         mock_claude: AsyncMock,
     ) -> None:
-        mock_claude.identify_form_fields.return_value = [
-            FormField(field_id="f1", label="Email", field_type="text"),
-            FormField(field_id="f2", label="Favorite Programming Language", field_type="text"),
-        ]
+        """DOM-based approach fills what it can and submits even with unrecognized fields."""
+        mock_page.evaluate = AsyncMock(return_value=[
+            {"label": "Email", "type": "text", "selector": "#email", "id": "email", "name": "email", "tag": "input", "value": ""},
+            {"label": "Favorite Programming Language", "type": "text", "selector": "#fav_lang", "id": "fav_lang", "name": "fav_lang", "tag": "input", "value": ""},
+        ])
+        mock_page.inner_text = AsyncMock(return_value="Application form")
 
         result = await process_external_apply(
             job_record=job_record,
@@ -367,32 +390,33 @@ class TestProcessExternalApply:
             claude_client=mock_claude,
         )
 
-        assert result.ok is False
-        assert result.reason == "unrecognized_field"
+        # DOM approach fills what it can and submits
+        assert result.ok is True
 
     @pytest.mark.asyncio
-    async def test_salary_missing_escalation(
+    async def test_salary_field_filled_when_configured(
         self,
         job_record: JobRecord,
         profile: UserProfile,
         mock_page: AsyncMock,
         mock_claude: AsyncMock,
     ) -> None:
-        mock_claude.identify_form_fields.return_value = [
-            FormField(field_id="f1", label="Email", field_type="text"),
-            FormField(field_id="f2", label="Salary Expectation", field_type="text"),
-        ]
+        """DOM-based approach fills salary field when min_salary is configured."""
+        mock_page.evaluate = AsyncMock(return_value=[
+            {"label": "Email", "type": "text", "selector": "#email", "id": "email", "name": "email", "tag": "input", "value": ""},
+            {"label": "Salary Expectation", "type": "text", "selector": "#salary", "id": "salary", "name": "salary", "tag": "input", "value": ""},
+        ])
+        mock_page.inner_text = AsyncMock(return_value="Application form")
 
         result = await process_external_apply(
             job_record=job_record,
             profile=profile,
             page=mock_page,
             claude_client=mock_claude,
-            min_salary=None,
+            min_salary=90000,
         )
 
-        assert result.ok is False
-        assert result.reason == "salary_missing"
+        assert result.ok is True
 
     @pytest.mark.asyncio
     async def test_too_many_pages_escalation(
@@ -402,13 +426,17 @@ class TestProcessExternalApply:
         mock_page: AsyncMock,
         mock_claude: AsyncMock,
     ) -> None:
-        mock_claude.identify_form_fields.return_value = [
-            FormField(field_id="email", label="Email", field_type="text"),
-        ]
+        # Provide DOM fields so the code proceeds
+        mock_page.evaluate = AsyncMock(return_value=[
+            {"label": "Email", "type": "text", "selector": "#email", "id": "email", "name": "email", "tag": "input", "value": ""},
+        ])
+        mock_page.inner_text = AsyncMock(return_value="Application form")
 
         # Simulate a "Next" button always present (multi-page form)
         next_btn = AsyncMock()
         next_btn.click = AsyncMock()
+        next_btn.is_visible = AsyncMock(return_value=True)
+        # Always return a button (simulates infinite next pages)
         mock_page.query_selector = AsyncMock(return_value=next_btn)
 
         result = await process_external_apply(
@@ -442,13 +470,13 @@ class TestProcessExternalApply:
         assert result.reason == "navigation_failed"
 
     @pytest.mark.asyncio
-    async def test_unsafe_value_rejected(
+    async def test_unsafe_value_skipped_during_fill(
         self,
         job_record: JobRecord,
         mock_page: AsyncMock,
         mock_claude: AsyncMock,
     ) -> None:
-        # Profile with a malicious value
+        """Profile with a malicious value is sanitized (skipped) but form still submits."""
         profile = UserProfile(
             full_name="<script>alert('xss')</script>",
             email="john@example.com",
@@ -456,10 +484,12 @@ class TestProcessExternalApply:
             location="New York, NY",
         )
 
-        mock_claude.identify_form_fields.return_value = [
-            FormField(field_id="name", label="Full Name", field_type="text"),
-        ]
-        mock_page.query_selector = AsyncMock(return_value=None)
+        # Provide DOM fields
+        mock_page.evaluate = AsyncMock(return_value=[
+            {"label": "Full Name", "type": "text", "selector": "#name", "id": "name", "name": "name", "tag": "input", "value": ""},
+            {"label": "Email", "type": "text", "selector": "#email", "id": "email", "name": "email", "tag": "input", "value": ""},
+        ])
+        mock_page.inner_text = AsyncMock(return_value="Application form")
 
         result = await process_external_apply(
             job_record=job_record,
@@ -468,5 +498,5 @@ class TestProcessExternalApply:
             claude_client=mock_claude,
         )
 
-        assert result.ok is False
-        assert result.reason == "unsafe_value"
+        # The unsafe name value is skipped but email is filled, form submits
+        assert result.ok is True

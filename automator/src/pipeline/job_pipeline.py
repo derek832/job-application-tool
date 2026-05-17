@@ -27,8 +27,11 @@ from src.db.job_repo import TERMINAL_STATUSES, create_job_record
 from src.db.models import JobRecord
 from src.integrations.gdocs_client import GDocsClient
 from src.integrations.linkedin_scraper import discover_and_extract_jobs
+from src.integrations.ntfy_client import NtfySettings
 from src.integrations.sms_gateway import SMSSettings
 from src.pipeline.easy_apply_stage import run_easy_apply
+from src.pipeline.notification_service import NotificationSettings, send_run_summary
+from src.pipeline.run_summary import RunStats, generate_summary_text, store_run_summary
 from src.pipeline.scoring_stage import run_scoring
 from src.pipeline.tailoring_stage import restore_resume_base, run_tailoring
 
@@ -120,6 +123,9 @@ async def run_pipeline(session: AsyncSession | None = None) -> None:
 
     # Build SMS settings if configured
     sms_settings = _build_sms_settings(settings)
+
+    # Build unified notification settings (ntfy + SMS)
+    notification_settings = await _build_notification_settings(session, settings)
 
     # Build Claude client
     claude_client: ClaudeClient | None = None
@@ -370,7 +376,7 @@ async def run_pipeline(session: AsyncSession | None = None) -> None:
                             deal_breakers=goals_profile.deal_breakers,
                             good_fit_threshold=settings.good_fit_threshold,
                             stretch_threshold=settings.stretch_threshold,
-                            sms_settings=sms_settings,
+                            notification_settings=notification_settings,
                         )
                         logger.info(
                             "pipeline_scoring_completed",
@@ -402,8 +408,9 @@ async def run_pipeline(session: AsyncSession | None = None) -> None:
                         session=session,
                         gdocs_client=gdocs_client,
                         claude_client=claude_client,
-                        sms_settings=sms_settings,
+                        notification_settings=notification_settings,
                         supplementary_context=goals_profile.supplementary_context,
+                        user_full_name=user_profile.full_name,
                     )
 
                     # Only proceed to apply if tailoring succeeded (status is "applying")
@@ -442,7 +449,7 @@ async def run_pipeline(session: AsyncSession | None = None) -> None:
                             session=session,
                             page=page,
                             claude_client=claude_client,
-                            sms_settings=sms_settings,
+                            notification_settings=notification_settings,
                             goals_profile=goals_json,
                         )
                     else:
@@ -506,12 +513,12 @@ async def run_pipeline(session: AsyncSession | None = None) -> None:
                                 "awaiting manual submission",
                             )
 
-                            if sms_settings:
+                            if notification_settings:
                                 await notify(
                                     session=session,
                                     job_record=job_record,
                                     trigger_reason="resume_ready_go_apply",
-                                    sms_settings=sms_settings,
+                                    settings=notification_settings,
                                 )
 
                             logger.info(
@@ -578,7 +585,10 @@ async def run_pipeline(session: AsyncSession | None = None) -> None:
         except Exception:
             pass
 
-    # Step 12: Update system_state.last_run_at
+    # Step 12: Generate and publish run summary
+    await _generate_and_publish_run_summary(session, notification_settings)
+
+    # Step 13: Update system_state.last_run_at
     now_iso = datetime.now(UTC).isoformat()
     current_state = await get_config(session, "system_state") or {}
     current_state["last_run_at"] = now_iso
@@ -706,6 +716,120 @@ def _build_sms_settings(settings: Settings) -> SMSSettings | None:
             sms_gateway=settings.sms_gateway,
         )
     return None
+
+
+async def _build_notification_settings(
+    session: AsyncSession,
+    settings: Settings,
+) -> NotificationSettings:
+    """Build unified NotificationSettings from config DB and application settings.
+
+    Loads ntfy configuration (enabled flag, server URL, topics, LAN URL, API token)
+    from the config table and combines with SMS settings from the Settings model.
+
+    Args:
+        session: Active async database session.
+        settings: The application settings containing Gmail and SMS config.
+
+    Returns:
+        A NotificationSettings instance with both ntfy and SMS configuration.
+    """
+    # Load ntfy config from DB
+    ntfy_enabled_raw = await get_config(session, "ntfy_enabled")
+    ntfy_enabled = ntfy_enabled_raw is True or ntfy_enabled_raw == "true"
+
+    ntfy_settings: NtfySettings | None = None
+    if ntfy_enabled:
+        ntfy_server_url = await get_config(session, "ntfy_server_url")
+        ntfy_urgent_topic = await get_config(session, "ntfy_urgent_topic")
+        ntfy_info_topic = await get_config(session, "ntfy_info_topic")
+        lan_base_url = await get_config(session, "lan_base_url")
+        api_token = await get_config(session, "api_token")
+
+        if ntfy_server_url and ntfy_urgent_topic and ntfy_info_topic and api_token:
+            ntfy_settings = NtfySettings(
+                server_url=ntfy_server_url,
+                urgent_topic=ntfy_urgent_topic,
+                info_topic=ntfy_info_topic,
+                lan_base_url=lan_base_url,
+                api_token=api_token,
+            )
+        else:
+            logger.warning(
+                "ntfy_enabled_but_incomplete_config",
+                has_server_url=bool(ntfy_server_url),
+                has_urgent_topic=bool(ntfy_urgent_topic),
+                has_info_topic=bool(ntfy_info_topic),
+                has_api_token=bool(api_token),
+            )
+
+    # Build SMS settings
+    sms_settings = _build_sms_settings(settings)
+    sms_enabled = sms_settings is not None
+
+    return NotificationSettings(
+        ntfy_enabled=ntfy_enabled,
+        ntfy=ntfy_settings,
+        sms_enabled=sms_enabled,
+        sms=sms_settings,
+    )
+
+
+async def _generate_and_publish_run_summary(
+    session: AsyncSession,
+    notification_settings: NotificationSettings,
+) -> None:
+    """Generate run statistics, store the summary, and publish to ntfy info topic.
+
+    Queries the database for jobs processed in the current run window and
+    computes aggregate statistics. Generates a plain-English summary, stores
+    it in the run_summaries table, and publishes it to the ntfy info topic.
+
+    Args:
+        session: Active async database session.
+        notification_settings: Unified notification settings for publishing.
+    """
+    try:
+        # Query job counts by status to build run stats
+        from sqlalchemy import func
+
+        # Get counts of jobs by their current status
+        result = await session.execute(
+            select(JobRecord.status, func.count(JobRecord.id))
+            .group_by(JobRecord.status)
+        )
+        status_counts: dict[str, int] = dict(result.all())
+
+        stats = RunStats(
+            jobs_discovered=sum(status_counts.values()),
+            jobs_scored=status_counts.get("scored", 0)
+            + status_counts.get("approved_for_apply", 0)
+            + status_counts.get("applying", 0)
+            + status_counts.get("applied", 0)
+            + status_counts.get("apply_failed", 0)
+            + status_counts.get("resume_failed", 0),
+            jobs_approved=status_counts.get("approved_for_apply", 0)
+            + status_counts.get("applying", 0)
+            + status_counts.get("applied", 0),
+            jobs_applied=status_counts.get("applied", 0),
+            jobs_skipped=status_counts.get("skipped", 0),
+            jobs_escalated=status_counts.get("scored", 0)
+            + status_counts.get("apply_failed", 0)
+            + status_counts.get("resume_failed", 0),
+            errors=[],
+        )
+
+        summary_text = generate_summary_text(stats)
+        await store_run_summary(session, stats, summary_text)
+        await send_run_summary(session, summary_text, notification_settings)
+        await session.flush()
+
+        logger.info(
+            "pipeline_run_summary_published",
+            summary=summary_text[:100],
+        )
+    except Exception as exc:
+        logger.error("pipeline_run_summary_failed", error=str(exc))
 
 
 def _load_cookies_from_state(state_path: str) -> list[dict[str, object]]:

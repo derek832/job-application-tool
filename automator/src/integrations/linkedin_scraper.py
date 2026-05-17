@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import random
 import re
 from dataclasses import dataclass
@@ -115,6 +116,36 @@ _RIGHT_PANEL_DESCRIPTION_SELECTORS: list[str] = [
 ]
 
 
+async def _extract_company_from_structured_data(page: Page) -> str | None:
+    """Extract company name from JSON-LD structured data embedded in the page.
+
+    LinkedIn includes schema.org JobPosting markup for Google Jobs indexing.
+    This is far more stable than DOM class names which change with UI redesigns.
+
+    Args:
+        page: A Playwright Page object showing a job listing.
+
+    Returns:
+        The company name string if found, or None if structured data is unavailable.
+    """
+    ld_json_els = await page.query_selector_all('script[type="application/ld+json"]')
+    for el in ld_json_els:
+        try:
+            raw = await el.inner_text()
+            data = json.loads(raw)
+            items = data if isinstance(data, list) else [data]
+            for item in items:
+                if item.get("@type") == "JobPosting":
+                    org = item.get("hiringOrganization", {})
+                    if isinstance(org, dict):
+                        name = org.get("name", "").strip()
+                        if name:
+                            return name
+        except (json.JSONDecodeError, AttributeError, TypeError):
+            continue
+    return None
+
+
 @dataclass
 class DiscoveredJob:
     """Job data extracted from the search results page."""
@@ -224,19 +255,29 @@ async def discover_and_extract_jobs(
                 if title_el:
                     title = (await title_el.inner_text()).strip()
 
-                # Try to get company from the right panel
-                company_el = await page.query_selector(
-                    "div.job-details-jobs-unified-top-card__company-name a, "
-                    "span.jobs-unified-top-card__company-name, "
-                    "a[class*='company-name'], "
-                    "div[class*='job-card-container__primary-description'], "
-                    "span[class*='topcard__flavor'], "
-                    "a[data-tracking-control-name='public_jobs_topcard-org-name']"
-                )
-                if company_el:
-                    company = (await company_el.inner_text()).strip()
+                # Prefer structured data for company name (stable across UI redesigns)
+                structured_company = await _extract_company_from_structured_data(page)
+                if structured_company:
+                    company = structured_company
+                    logger.debug(
+                        "company_from_structured_data",
+                        job_id=job_id,
+                        company=company,
+                    )
+                else:
+                    # Fallback: try DOM selectors on the right panel
+                    company_el = await page.query_selector(
+                        "div.job-details-jobs-unified-top-card__company-name a, "
+                        "span.jobs-unified-top-card__company-name, "
+                        "a[class*='company-name'], "
+                        "div[class*='job-card-container__primary-description'], "
+                        "span[class*='topcard__flavor'], "
+                        "a[data-tracking-control-name='public_jobs_topcard-org-name']"
+                    )
+                    if company_el:
+                        company = (await company_el.inner_text()).strip()
 
-                # Fallback: try to get company from the card itself
+                # Final fallback: try to get company from the card itself
                 if company == "Unknown":
                     card_subtitle = await card.query_selector(
                         "span[class*='subtitle'], "

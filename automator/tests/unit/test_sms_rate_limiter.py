@@ -1,8 +1,9 @@
 """
 Unit tests for the SMS rate limiter.
 
-Tests verify that check_rate_limit correctly allows or blocks SMS sends
-based on the count of successful notifications in the last hour.
+Tests verify that check_rate_limit correctly allows or blocks sends
+based on the count of successful notifications in the last hour,
+regardless of which channel (ntfy, sms, sms_fallback) was used.
 """
 
 from __future__ import annotations
@@ -37,6 +38,7 @@ async def _insert_notifications(
     *,
     minutes_ago: int = 30,
     success: int = 1,
+    channel: str = "sms",
 ) -> None:
     """Insert notification_log rows with sent_at set to `minutes_ago` minutes before now."""
     sent_at = (datetime.now(tz=UTC) - timedelta(minutes=minutes_ago)).isoformat()
@@ -47,6 +49,7 @@ async def _insert_notifications(
                 sms_body=f"Test message {i}",
                 sent_at=sent_at,
                 success=success,
+                channel=channel,
             )
         )
     await session.flush()
@@ -113,5 +116,43 @@ async def test_mixed_old_and_recent(session: AsyncSession) -> None:
     """Only recent sends count; old sends are excluded."""
     await _insert_notifications(session, 8, minutes_ago=61)  # old, ignored
     await _insert_notifications(session, 9, minutes_ago=30)  # recent, counted
+    result = await check_rate_limit(session)
+    assert result is True
+
+
+@pytest.mark.asyncio
+async def test_counts_ntfy_sends_toward_limit(session: AsyncSession) -> None:
+    """Ntfy sends count toward the shared rate limit."""
+    await _insert_notifications(session, 10, minutes_ago=30, channel="ntfy")
+    result = await check_rate_limit(session)
+    assert result is False
+
+
+@pytest.mark.asyncio
+async def test_counts_sms_fallback_sends_toward_limit(session: AsyncSession) -> None:
+    """SMS fallback sends count toward the shared rate limit."""
+    await _insert_notifications(session, 10, minutes_ago=30, channel="sms_fallback")
+    result = await check_rate_limit(session)
+    assert result is False
+
+
+@pytest.mark.asyncio
+async def test_mixed_channels_share_limit(session: AsyncSession) -> None:
+    """Sends across different channels all count toward the same shared limit."""
+    await _insert_notifications(session, 4, minutes_ago=30, channel="ntfy")
+    await _insert_notifications(session, 3, minutes_ago=30, channel="sms")
+    await _insert_notifications(session, 3, minutes_ago=30, channel="sms_fallback")
+    # Total = 10, should be blocked
+    result = await check_rate_limit(session)
+    assert result is False
+
+
+@pytest.mark.asyncio
+async def test_mixed_channels_below_limit(session: AsyncSession) -> None:
+    """Mixed channel sends below 10 total still allow sending."""
+    await _insert_notifications(session, 3, minutes_ago=30, channel="ntfy")
+    await _insert_notifications(session, 3, minutes_ago=30, channel="sms")
+    await _insert_notifications(session, 3, minutes_ago=30, channel="sms_fallback")
+    # Total = 9, should be allowed
     result = await check_rate_limit(session)
     assert result is True

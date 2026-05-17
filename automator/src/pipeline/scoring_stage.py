@@ -15,10 +15,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.agents.claude_client import ClaudeClient, FitScoreResult
 from src.db.job_repo import update_job_status
-from src.db.models import JobRecord, NotificationLog
-from src.integrations.sms_gateway import SMSSettings, compose_sms, send_sms
-from src.integrations.sms_rate_limiter import check_rate_limit
+from src.db.models import JobRecord
 from src.pipeline.fit_classifier import classify_fit, is_threshold_boundary
+from src.pipeline.notification_service import NotificationSettings, notify
 
 logger = structlog.get_logger(__name__)
 
@@ -32,7 +31,7 @@ async def run_scoring(
     deal_breakers: list[str],
     good_fit_threshold: int,
     stretch_threshold: int,
-    sms_settings: SMSSettings | None = None,
+    notification_settings: NotificationSettings | None = None,
 ) -> None:
     """Score a job record and route it based on fit classification.
 
@@ -50,7 +49,8 @@ async def run_scoring(
         deal_breakers: List of deal-breaker keywords/phrases from the goals profile.
         good_fit_threshold: Score at or above which a job is a good fit.
         stretch_threshold: Score at or above which a job is a stretch role.
-        sms_settings: SMS gateway settings for notifications. If None, SMS is skipped.
+        notification_settings: Unified notification settings. If None, notifications
+            are skipped.
 
     Raises:
         ScoringError: If the Claude API call fails after all retries.
@@ -132,7 +132,7 @@ async def run_scoring(
             session=session,
             job_record=job_record,
             trigger_reason="score_at_threshold_boundary",
-            sms_settings=sms_settings,
+            notification_settings=notification_settings,
         )
 
     elif classification == "good_fit":
@@ -167,7 +167,7 @@ async def run_scoring(
             session=session,
             job_record=job_record,
             trigger_reason="stretch_role",
-            sms_settings=sms_settings,
+            notification_settings=notification_settings,
         )
 
     else:
@@ -191,87 +191,31 @@ async def _send_notification(
     session: AsyncSession,
     job_record: JobRecord,
     trigger_reason: str,
-    sms_settings: SMSSettings | None,
+    notification_settings: NotificationSettings | None,
 ) -> None:
-    """Send an SMS notification and log it to the notification_log table.
+    """Send a notification via the centralized notification service.
 
-    Checks the rate limit before sending. Logs the notification attempt
-    regardless of success or failure.
+    Delegates to the refactored notify() function which handles channel routing
+    (ntfy primary, SMS fallback), rate limiting, and logging.
 
     Args:
         session: Active async database session.
         job_record: The job record triggering the notification.
         trigger_reason: The reason for the notification.
-        sms_settings: SMS gateway settings. If None, notification is logged but not sent.
+        notification_settings: Unified notification settings. If None, notification
+            is skipped.
     """
-    sms_body = compose_sms(
-        job_record.job_title, job_record.company, trigger_reason, job_record.fit_score
-    )
-    now_iso = datetime.now(UTC).isoformat()
-
-    if sms_settings is None:
+    if notification_settings is None:
         logger.warning(
-            "sms_settings_not_configured",
+            "notification_settings_not_configured",
             job_id=job_record.id,
             trigger_reason=trigger_reason,
         )
-        # Log the notification attempt as unsuccessful (no settings)
-        log_entry = NotificationLog(
-            job_id=job_record.id,
-            trigger_reason=trigger_reason,
-            sms_body=sms_body,
-            sent_at=now_iso,
-            success=0,
-            error_message="SMS settings not configured",
-        )
-        session.add(log_entry)
-        await session.flush()
         return
 
-    # Check rate limit
-    allowed = await check_rate_limit(session)
-    if not allowed:
-        logger.warning(
-            "sms_rate_limited",
-            job_id=job_record.id,
-            trigger_reason=trigger_reason,
-        )
-        log_entry = NotificationLog(
-            job_id=job_record.id,
-            trigger_reason=trigger_reason,
-            sms_body=sms_body,
-            sent_at=now_iso,
-            success=0,
-            error_message="Rate limit exceeded",
-        )
-        session.add(log_entry)
-        await session.flush()
-        return
-
-    # Send SMS
-    result = await send_sms(sms_body, sms_settings)
-
-    log_entry = NotificationLog(
-        job_id=job_record.id,
+    await notify(
+        session=session,
+        job_record=job_record,
         trigger_reason=trigger_reason,
-        sms_body=sms_body,
-        sent_at=now_iso,
-        success=1 if result.ok else 0,
-        error_message=result.error,
+        settings=notification_settings,
     )
-    session.add(log_entry)
-    await session.flush()
-
-    if result.ok:
-        logger.info(
-            "sms_notification_sent",
-            job_id=job_record.id,
-            trigger_reason=trigger_reason,
-        )
-    else:
-        logger.error(
-            "sms_notification_failed",
-            job_id=job_record.id,
-            trigger_reason=trigger_reason,
-            error=result.error,
-        )

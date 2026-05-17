@@ -31,6 +31,11 @@ ConfigKey = Literal[
     "settings",
     "system_state",
     "api_token",
+    "ntfy_enabled",
+    "ntfy_server_url",
+    "ntfy_urgent_topic",
+    "ntfy_info_topic",
+    "lan_base_url",
 ]
 
 VALID_CONFIG_KEYS: frozenset[str] = frozenset(
@@ -41,6 +46,11 @@ VALID_CONFIG_KEYS: frozenset[str] = frozenset(
         "settings",
         "system_state",
         "api_token",
+        "ntfy_enabled",
+        "ntfy_server_url",
+        "ntfy_urgent_topic",
+        "ntfy_info_topic",
+        "lan_base_url",
     }
 )
 

@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import re
 from dataclasses import dataclass
+from datetime import UTC, datetime
 
 import structlog
 from playwright.async_api import Page
@@ -20,7 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.agents.claude_client import ClaudeClient, FormField
 from src.api.schemas import UserProfile
-from src.db.models import JobRecord
+from src.db.models import ExternalApplyLog, JobRecord
 
 logger = structlog.get_logger()
 
@@ -294,6 +295,42 @@ def _is_optional_field(label_lower: str) -> bool:
 # ---------------------------------------------------------------------------
 
 
+async def _log_external_apply(
+    session: AsyncSession | None,
+    job_id: str,
+    domain: str,
+    method: str,
+    dom_fields_found: int,
+    vision_fields_found: int,
+    fields_filled: int,
+    outcome: str,
+    failure_reason: str | None = None,
+) -> None:
+    """Write an ExternalApplyLog row to track extraction method usage.
+
+    Silently skips if no session is available (e.g. during tests without DB).
+    """
+    if session is None:
+        return
+    try:
+        entry = ExternalApplyLog(
+            job_id=job_id,
+            domain=domain,
+            method=method,
+            dom_fields_found=dom_fields_found,
+            vision_fields_found=vision_fields_found,
+            fields_filled=fields_filled,
+            outcome=outcome,
+            failure_reason=failure_reason,
+            timestamp=datetime.now(UTC).isoformat(),
+        )
+        session.add(entry)
+        await session.flush()
+    except Exception:
+        # Tracking should never break the apply flow
+        logger.debug("external_apply_log_write_failed", job_id=job_id)
+
+
 async def process_external_apply(
     job_record: JobRecord,
     profile: UserProfile,
@@ -412,12 +449,26 @@ async def process_external_apply(
             )
 
     page_count = 0
+    total_dom_fields_found = 0
+    total_filled_count = 0
+    filled_details: list[dict[str, str]] = []
 
     while True:
         page_count += 1
 
         if page_count > MAX_FORM_PAGES:
             log.warning("too_many_pages", page_count=page_count)
+            await _log_external_apply(
+                session,
+                job_record.id,
+                domain,
+                "dom",
+                total_dom_fields_found,
+                0,
+                total_filled_count,
+                "failed",
+                "too_many_pages",
+            )
             return Result(
                 ok=False,
                 error=f"External form has {page_count} pages (max {MAX_FORM_PAGES})",
@@ -427,6 +478,7 @@ async def process_external_apply(
         # Extract form fields from the DOM
         dom_fields = await _extract_dom_fields(page)
         log.info("dom_fields_extracted", count=len(dom_fields), page_number=page_count)
+        total_dom_fields_found += len(dom_fields)
 
         if not dom_fields:
             # No fields found — might be a confirmation page or error
@@ -437,6 +489,17 @@ async def process_external_apply(
         page_text = await page.inner_text("body")
         if _page_has_captcha(page_text):
             log.warning("captcha_detected")
+            await _log_external_apply(
+                session,
+                job_record.id,
+                domain,
+                "dom",
+                total_dom_fields_found,
+                0,
+                total_filled_count,
+                "escalated",
+                "captcha_detected",
+            )
             return Result(
                 ok=False,
                 error="CAPTCHA detected on application form",
@@ -463,7 +526,6 @@ async def process_external_apply(
 
         # Fill text/select fields
         filled_count = 0
-        filled_details: list[dict[str, str]] = []
         for field_info in fill_plan:
             value = field_info.get("value")
             if not value:
@@ -500,6 +562,7 @@ async def process_external_apply(
                     log.debug("field_fill_failed", label=field_info["label"], error=str(exc))
 
         log.info("fields_filled", filled=filled_count, total=len(fill_plan), page=page_count)
+        total_filled_count += filled_count
 
         # Check for Next/Continue button (multi-page form)
         next_button = await page.query_selector(
@@ -526,8 +589,39 @@ async def process_external_apply(
 
     notes = _json.dumps(filled_details, indent=2) if filled_details else None
 
+    # If no DOM fields were found at all, this is where vision would be needed
+    if total_dom_fields_found == 0:
+        log.warning("dom_extraction_failed_completely", domain=domain)
+        await _log_external_apply(
+            session,
+            job_record.id,
+            domain,
+            "none",
+            0,
+            0,
+            0,
+            "failed",
+            "no_dom_fields",
+        )
+        return Result(
+            ok=False,
+            error="No form fields found via DOM extraction",
+            reason="no_dom_fields",
+        )
+
     if dry_run:
         log.info("dry_run_skipping_submit", fields_filled=True)
+        method = "dom" if total_dom_fields_found > 0 else "none"
+        await _log_external_apply(
+            session,
+            job_record.id,
+            domain,
+            method,
+            total_dom_fields_found,
+            0,
+            total_filled_count,
+            "dry_run",
+        )
         return Result(ok=True, application_notes=notes)
 
     try:
@@ -544,17 +638,60 @@ async def process_external_apply(
                 await page.wait_for_load_state("domcontentloaded", timeout=15000)
             else:
                 log.warning("submit_button_not_visible")
+                await _log_external_apply(
+                    session,
+                    job_record.id,
+                    domain,
+                    "dom",
+                    total_dom_fields_found,
+                    0,
+                    total_filled_count,
+                    "failed",
+                    "no_submit_button",
+                )
                 return Result(
                     ok=False, error="Submit button not visible", reason="no_submit_button"
                 )
         else:
             log.warning("no_submit_button")
+            await _log_external_apply(
+                session,
+                job_record.id,
+                domain,
+                "dom",
+                total_dom_fields_found,
+                0,
+                total_filled_count,
+                "failed",
+                "no_submit_button",
+            )
             return Result(ok=False, error="Could not find submit button", reason="no_submit_button")
     except Exception as exc:
         log.error("submission_failed", error=str(exc))
+        await _log_external_apply(
+            session,
+            job_record.id,
+            domain,
+            "dom",
+            total_dom_fields_found,
+            0,
+            total_filled_count,
+            "failed",
+            "submission_failed",
+        )
         return Result(ok=False, error=f"Form submission failed: {exc}", reason="submission_failed")
 
     log.info("external_apply_success")
+    await _log_external_apply(
+        session,
+        job_record.id,
+        domain,
+        "dom",
+        total_dom_fields_found,
+        0,
+        total_filled_count,
+        "submitted",
+    )
     return Result(ok=True, application_notes=notes)
 
 

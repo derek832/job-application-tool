@@ -59,12 +59,23 @@ class TestLifespan:
         async def fake_get_session():
             yield mock_session
 
+        async def fake_get_config(session, key):
+            if key == "api_token":
+                return "existing_token"
+            if key == "settings":
+                return {"good_fit_threshold": 75, "stretch_threshold": 50, "dry_run": False}
+            return None
+
         with (
             patch("src.main.build_engine", return_value=mock_engine) as mock_build,
             patch("src.main.init_db", new_callable=AsyncMock) as mock_init,
-            patch("src.main.get_session", side_effect=[fake_get_session(), fake_get_session()]),
-            patch("src.main.get_config", new_callable=AsyncMock, return_value="existing_token"),
+            patch("src.main.get_session", side_effect=[fake_get_session(), fake_get_session(), fake_get_session(), fake_get_session(), fake_get_session()]),
+            patch("src.main.get_config", side_effect=fake_get_config),
+            patch("src.main.set_config", new_callable=AsyncMock),
             patch("src.main.setup_scheduler") as mock_sched,
+            patch("src.main.ensure_topics", new_callable=AsyncMock),
+            patch("src.main.create_lan_app"),
+            patch("src.main.start_lan_server", new_callable=AsyncMock),
         ):
             mock_sched.return_value = MagicMock(running=True, shutdown=MagicMock())
 
@@ -87,24 +98,27 @@ class TestLifespan:
 
         stored_token: list[str] = []
 
-        async def fake_get_config(session: object, key: str) -> object:
+        async def fake_get_config(session, key):
             if key == "api_token":
                 return None
             if key == "settings":
                 return None
             return None
 
-        async def fake_set_config(session: object, key: str, value: object) -> None:
+        async def fake_set_config(session, key, value):
             if key == "api_token":
-                stored_token.append(value)  # type: ignore[arg-type]
+                stored_token.append(value)
 
         with (
             patch("src.main.build_engine", return_value=mock_engine),
             patch("src.main.init_db", new_callable=AsyncMock),
-            patch("src.main.get_session", side_effect=[fake_get_session(), fake_get_session()]),
+            patch("src.main.get_session", side_effect=[fake_get_session(), fake_get_session(), fake_get_session(), fake_get_session(), fake_get_session()]),
             patch("src.main.get_config", side_effect=fake_get_config),
             patch("src.main.set_config", side_effect=fake_set_config),
             patch("src.main.setup_scheduler") as mock_sched,
+            patch("src.main.ensure_topics", new_callable=AsyncMock),
+            patch("src.main.create_lan_app"),
+            patch("src.main.start_lan_server", new_callable=AsyncMock),
         ):
             mock_sched.return_value = MagicMock(running=True, shutdown=MagicMock())
 
@@ -129,23 +143,26 @@ class TestLifespan:
 
         set_config_called = []
 
-        async def fake_get_config(session: object, key: str) -> object:
+        async def fake_get_config(session, key):
             if key == "api_token":
                 return "existing_token_value"
             if key == "settings":
-                return None
+                return {"good_fit_threshold": 75, "stretch_threshold": 50, "dry_run": False}
             return None
 
-        async def fake_set_config(session: object, key: str, value: object) -> None:
+        async def fake_set_config(session, key, value):
             set_config_called.append(key)
 
         with (
             patch("src.main.build_engine", return_value=mock_engine),
             patch("src.main.init_db", new_callable=AsyncMock),
-            patch("src.main.get_session", side_effect=[fake_get_session(), fake_get_session()]),
+            patch("src.main.get_session", side_effect=[fake_get_session(), fake_get_session(), fake_get_session(), fake_get_session(), fake_get_session()]),
             patch("src.main.get_config", side_effect=fake_get_config),
             patch("src.main.set_config", side_effect=fake_set_config),
             patch("src.main.setup_scheduler") as mock_sched,
+            patch("src.main.ensure_topics", new_callable=AsyncMock),
+            patch("src.main.create_lan_app"),
+            patch("src.main.start_lan_server", new_callable=AsyncMock),
         ):
             mock_sched.return_value = MagicMock(running=True, shutdown=MagicMock())
 
@@ -168,13 +185,23 @@ class TestLifespan:
         async def fake_get_session():
             yield mock_session
 
+        async def fake_get_config(session, key):
+            if key == "api_token":
+                return None
+            if key == "settings":
+                return None
+            return None
+
         with (
             patch("src.main.build_engine", return_value=mock_engine),
             patch("src.main.init_db", new_callable=AsyncMock),
-            patch("src.main.get_session", side_effect=[fake_get_session(), fake_get_session()]),
-            patch("src.main.get_config", new_callable=AsyncMock, return_value=None),
+            patch("src.main.get_session", side_effect=[fake_get_session(), fake_get_session(), fake_get_session(), fake_get_session(), fake_get_session()]),
+            patch("src.main.get_config", side_effect=fake_get_config),
             patch("src.main.set_config", new_callable=AsyncMock),
             patch("src.main.setup_scheduler") as mock_sched,
+            patch("src.main.ensure_topics", new_callable=AsyncMock),
+            patch("src.main.create_lan_app"),
+            patch("src.main.start_lan_server", new_callable=AsyncMock),
         ):
             mock_sched.return_value = MagicMock(running=True, shutdown=MagicMock())
 
@@ -195,12 +222,23 @@ class TestLifespan:
         async def fake_get_session():
             yield mock_session
 
+        async def fake_get_config(session, key):
+            if key == "api_token":
+                return "token"
+            if key == "settings":
+                return {"good_fit_threshold": 75, "stretch_threshold": 50, "dry_run": False}
+            return None
+
         with (
             patch("src.main.build_engine", return_value=mock_engine),
             patch("src.main.init_db", new_callable=AsyncMock),
-            patch("src.main.get_session", side_effect=[fake_get_session(), fake_get_session()]),
-            patch("src.main.get_config", new_callable=AsyncMock, return_value="token"),
+            patch("src.main.get_session", side_effect=[fake_get_session(), fake_get_session(), fake_get_session(), fake_get_session(), fake_get_session()]),
+            patch("src.main.get_config", side_effect=fake_get_config),
+            patch("src.main.set_config", new_callable=AsyncMock),
             patch("src.main.setup_scheduler") as mock_sched,
+            patch("src.main.ensure_topics", new_callable=AsyncMock),
+            patch("src.main.create_lan_app"),
+            patch("src.main.start_lan_server", new_callable=AsyncMock),
         ):
             mock_sched.return_value = MagicMock(running=True, shutdown=MagicMock())
 
@@ -224,15 +262,24 @@ class TestLifespan:
 
         mock_scheduler_instance = MagicMock(running=True, shutdown=MagicMock())
 
+        async def fake_get_config(session, key):
+            if key == "api_token":
+                return "token"
+            if key == "settings":
+                return {"good_fit_threshold": 75, "stretch_threshold": 50, "dry_run": False}
+            return None
+
         with (
             patch("src.main.build_engine", return_value=mock_engine),
             patch("src.main.init_db", new_callable=AsyncMock),
-            patch("src.main.get_session", side_effect=[fake_get_session(), fake_get_session()]),
-            patch("src.main.get_config", new_callable=AsyncMock, return_value="token"),
+            patch("src.main.get_session", side_effect=[fake_get_session(), fake_get_session(), fake_get_session(), fake_get_session(), fake_get_session()]),
+            patch("src.main.get_config", side_effect=fake_get_config),
+            patch("src.main.set_config", new_callable=AsyncMock),
             patch("src.main.setup_scheduler") as mock_sched,
+            patch("src.main.ensure_topics", new_callable=AsyncMock),
+            patch("src.main.create_lan_app"),
+            patch("src.main.start_lan_server", new_callable=AsyncMock),
         ):
-            mock_sched.return_value = mock_scheduler_instance
-
             # setup_scheduler stores on app.state.scheduler
             def side_effect_setup(a, t):
                 a.state.scheduler = mock_scheduler_instance

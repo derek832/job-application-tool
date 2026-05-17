@@ -9,6 +9,7 @@ application.
 from __future__ import annotations
 
 import json
+import re
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -21,12 +22,53 @@ from src.db.job_repo import update_job_status
 from src.db.models import JobRecord
 from src.exceptions import GDocsError, TailoringError
 from src.integrations.gdocs_client import GDocsClient
-from src.integrations.sms_gateway import SMSSettings
-from src.pipeline.notification_service import notify
+from src.pipeline.notification_service import NotificationSettings, notify
 
 logger = structlog.get_logger(__name__)
 
 PDF_OUTPUT_DIR = "data/pdfs"
+
+
+def _build_pdf_filename(full_name: str | None, company: str, job_title: str) -> str:
+    """Build a professional, filesystem-safe PDF filename.
+
+    Produces filenames like: Derek_Smith_Acme_Corp_Software_Engineer_Resume.pdf
+
+    Each component (name, company, title) is sanitized by replacing spaces with
+    underscores and stripping characters that are unsafe for filesystems. If the
+    user's full name is not configured, it is omitted from the filename.
+
+    Args:
+        full_name: User's full name from their profile (may be None).
+        company: Company name from the job record.
+        job_title: Job title from the job record.
+
+    Returns:
+        A sanitized filename string ending in .pdf.
+    """
+
+    def sanitize(text: str) -> str:
+        """Replace spaces with underscores and strip non-alphanumeric/underscore chars."""
+        text = text.strip().replace(" ", "_")
+        text = re.sub(r"[^\w\-]", "", text)
+        # Collapse multiple underscores
+        text = re.sub(r"_+", "_", text)
+        return text.strip("_")
+
+    parts: list[str] = []
+    if full_name:
+        parts.append(sanitize(full_name))
+    parts.append(sanitize(company))
+    parts.append(sanitize(job_title))
+    parts.append("Resume")
+
+    filename = "_".join(part for part in parts if part)
+
+    # Truncate to keep total path length reasonable (max 150 chars for the name)
+    if len(filename) > 150:
+        filename = filename[:150].rstrip("_")
+
+    return f"{filename}.pdf"
 
 
 async def run_tailoring(
@@ -34,8 +76,9 @@ async def run_tailoring(
     session: AsyncSession,
     gdocs_client: GDocsClient,
     claude_client: ClaudeClient,
-    sms_settings: SMSSettings | None = None,
+    notification_settings: NotificationSettings | None = None,
     supplementary_context: str | None = None,
+    user_full_name: str | None = None,
 ) -> None:
     """Run the resume tailoring stage for a single job record.
 
@@ -45,7 +88,7 @@ async def run_tailoring(
 
     On GDocsError with authorization_expired=True: pauses the system and
     notifies the user. On other failures after retries: sets status to
-    "resume_failed", adds to human queue, and sends SMS.
+    "resume_failed", adds to human queue, and sends notification.
 
     Args:
         job_record: The job record to tailor a resume for. Must have status
@@ -53,11 +96,13 @@ async def run_tailoring(
         session: Active async database session for persisting state changes.
         gdocs_client: An initialized Google Apps Script client.
         claude_client: The Claude API client instance for resume tailoring.
-        sms_settings: SMTP credentials for SMS notifications. If None,
+        notification_settings: Unified notification settings. If None,
             notifications are skipped on failure.
         supplementary_context: Additional experience notes or work details
             passed to Claude for richer keyword matching. Not included in
             the final tailored resume output.
+        user_full_name: User's full name from their profile, used to build
+            a professional PDF filename. If None, the name is omitted.
     """
     job_id = job_record.id
     logger.info("tailoring_stage_started", job_id=job_id, company=job_record.company)
@@ -66,7 +111,7 @@ async def run_tailoring(
     try:
         resume_base = await gdocs_client.read_resume()
     except GDocsError as exc:
-        await _handle_gdocs_error(exc, job_record, session, sms_settings)
+        await _handle_gdocs_error(exc, job_record, session, notification_settings)
         return
 
     # Step 2: Store pre-tailoring snapshot
@@ -81,7 +126,7 @@ async def run_tailoring(
             supplementary_context=supplementary_context,
         )
     except TailoringError as exc:
-        await _handle_tailoring_failure(exc.message, job_record, session, sms_settings)
+        await _handle_tailoring_failure(exc.message, job_record, session, notification_settings)
         return
 
     # Parse the replacements JSON from Claude
@@ -92,7 +137,7 @@ async def run_tailoring(
             raise ValueError("Expected a JSON array of replacements")
     except (json.JSONDecodeError, ValueError) as exc:
         await _handle_tailoring_failure(
-            f"Failed to parse tailoring replacements: {exc}", job_record, session, sms_settings
+            f"Failed to parse tailoring replacements: {exc}", job_record, session, notification_settings
         )
         return
 
@@ -101,7 +146,8 @@ async def run_tailoring(
     await session.flush()
 
     # Step 4+5: Copy original doc, apply replacements, export PDF (preserves formatting)
-    pdf_path = f"{PDF_OUTPUT_DIR}/{job_id}.pdf"
+    pdf_filename = _build_pdf_filename(user_full_name, job_record.company, job_record.job_title)
+    pdf_path = f"{PDF_OUTPUT_DIR}/{pdf_filename}"
     try:
         applied = await gdocs_client.tailor_and_export(replacements, Path(pdf_path))
         logger.info(
@@ -111,7 +157,7 @@ async def run_tailoring(
             applied=applied,
         )
     except GDocsError as exc:
-        await _handle_gdocs_error(exc, job_record, session, sms_settings)
+        await _handle_gdocs_error(exc, job_record, session, notification_settings)
         return
 
     # Step 6: Update job record with PDF path and advance status
@@ -182,7 +228,7 @@ async def _handle_gdocs_error(
     exc: GDocsError,
     job_record: JobRecord,
     session: AsyncSession,
-    sms_settings: SMSSettings | None,
+    notification_settings: NotificationSettings | None,
 ) -> None:
     """Handle a GDocsError during the tailoring stage.
 
@@ -206,28 +252,28 @@ async def _handle_gdocs_error(
                 "last_run_at": datetime.now(UTC).isoformat(),
             },
         )
-        if sms_settings:
+        if notification_settings:
             await notify(
                 session=session,
                 job_record=job_record,
                 trigger_reason="gdocs_authorization_expired",
-                sms_settings=sms_settings,
+                settings=notification_settings,
             )
         return
 
-    await _handle_tailoring_failure(exc.message, job_record, session, sms_settings)
+    await _handle_tailoring_failure(exc.message, job_record, session, notification_settings)
 
 
 async def _handle_tailoring_failure(
     error_message: str,
     job_record: JobRecord,
     session: AsyncSession,
-    sms_settings: SMSSettings | None,
+    notification_settings: NotificationSettings | None,
 ) -> None:
     """Handle a non-authorization tailoring failure.
 
     Sets the job status to "resume_failed", records the error, adds to the
-    human queue, and sends an SMS notification if settings are available.
+    human queue, and sends a notification if settings are available.
     """
     job_id = job_record.id
     logger.error("tailoring_stage_failed", job_id=job_id, error=error_message)
@@ -241,10 +287,10 @@ async def _handle_tailoring_failure(
         reason=f"Resume tailoring failed: {error_message}",
     )
 
-    if sms_settings:
+    if notification_settings:
         await notify(
             session=session,
             job_record=job_record,
             trigger_reason="resume_tailoring_failed",
-            sms_settings=sms_settings,
+            settings=notification_settings,
         )

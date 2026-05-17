@@ -14,17 +14,21 @@ import os
 import secrets
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
+from urllib.parse import urlparse
 
 import structlog
 from fastapi import FastAPI
 
 from src.api.config_routes import router as config_router
 from src.api.job_routes import router as job_router
+from src.api.lan_server import create_lan_app, start_lan_server
 from src.api.log_routes import router as log_router
 from src.api.queue_routes import router as queue_router
+from src.api.run_routes import router as run_router
 from src.api.system_routes import router as system_router
 from src.db.config_repo import get_config, set_config
 from src.db.database import build_engine, get_session, init_db
+from src.integrations.ntfy_topic_gen import ensure_topics
 from src.scheduler.scheduler import setup_scheduler
 
 logger = structlog.get_logger(__name__)
@@ -111,6 +115,52 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             logger.info("settings_seeded_from_env", keys=list(env_mapping.keys()))
         break
 
+    # Seed ntfy configuration defaults if not already present
+    async for session in get_session():
+        ntfy_enabled = await get_config(session, "ntfy_enabled")
+        if ntfy_enabled is None:
+            await set_config(session, "ntfy_enabled", False)
+            logger.info("ntfy_config_seeded", key="ntfy_enabled", value=False)
+
+        ntfy_server_url = await get_config(session, "ntfy_server_url")
+        if ntfy_server_url is None:
+            await set_config(session, "ntfy_server_url", "https://ntfy.sh")
+            logger.info("ntfy_config_seeded", key="ntfy_server_url", value="https://ntfy.sh")
+
+        lan_base_url = await get_config(session, "lan_base_url")
+        if lan_base_url is None:
+            await set_config(session, "lan_base_url", None)
+            logger.info("ntfy_config_seeded", key="lan_base_url", value=None)
+
+        await session.commit()
+
+        # Auto-generate ntfy topics if absent
+        await ensure_topics(session)
+        break
+
+    # Start LAN server if lan_base_url is configured
+    async for session in get_session():
+        lan_base_url = await get_config(session, "lan_base_url")
+        break
+
+    if lan_base_url:
+        parsed = urlparse(lan_base_url)
+        lan_ip = parsed.hostname or "0.0.0.0"
+        lan_port = parsed.port or 7432
+        lan_app = create_lan_app(app)
+        await start_lan_server(lan_ip, lan_port, lan_app)
+        logger.info(
+            "lan_server_started",
+            host=lan_ip,
+            port=lan_port,
+            base_url=lan_base_url,
+        )
+    else:
+        logger.warning(
+            "lan_server_skipped",
+            reason="lan_base_url not configured — ntfy action buttons are disabled",
+        )
+
     # Determine scheduled time from settings (if configured)
     async for session in get_session():
         settings = await get_config(session, "settings")
@@ -153,6 +203,7 @@ app.include_router(config_router)
 app.include_router(job_router)
 app.include_router(log_router)
 app.include_router(queue_router)
+app.include_router(run_router)
 
 
 if __name__ == "__main__":

@@ -13,7 +13,7 @@ import structlog
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.db.models import VALID_STATUSES, JobRecord, StatusTransition
+from src.db.models import VALID_STATUSES, ExternalApplyLog, JobRecord, StatusTransition
 
 logger = structlog.get_logger(__name__)
 
@@ -98,9 +98,7 @@ async def update_job_status(
         ValueError: If no JobRecord exists with the given ``job_id``.
     """
     if new_status not in VALID_STATUSES:
-        raise ValueError(
-            f"Invalid status {new_status!r}. " f"Must be one of: {sorted(VALID_STATUSES)}"
-        )
+        raise ValueError(f"Invalid status {new_status!r}. Must be one of: {sorted(VALID_STATUSES)}")
 
     record = await get_job_record(session, job_id)
     if record is None:
@@ -253,3 +251,81 @@ async def get_queue_items(session: AsyncSession) -> list[JobRecord]:
     )
     result = await session.execute(query)
     return list(result.scalars().all())
+
+
+async def get_external_apply_stats(session: AsyncSession) -> dict[str, int | float]:
+    """Return statistics on external apply attempts and extraction methods.
+
+    Tracks how often DOM extraction succeeds vs. when vision would be needed,
+    informing cost/architecture decisions about local model hosting.
+
+    Returns:
+        A dict with keys:
+        - ``total_attempts``: total external apply attempts logged
+        - ``dom_success``: attempts where DOM extraction found fields
+        - ``dom_failed``: attempts where DOM extraction found no fields
+        - ``vision_used``: attempts that fell back to Claude Vision
+        - ``dom_success_rate``: dom_success / total_attempts (or 0)
+        - ``avg_dom_fields``: average DOM fields found per attempt
+        - ``avg_fields_filled``: average fields filled per attempt
+        - ``outcomes``: dict of outcome → count
+    """
+    # Total attempts
+    total_result = await session.execute(select(func.count(ExternalApplyLog.id)))
+    total_attempts = total_result.scalar_one()
+
+    if total_attempts == 0:
+        return {
+            "total_attempts": 0,
+            "dom_success": 0,
+            "dom_failed": 0,
+            "vision_used": 0,
+            "dom_success_rate": 0.0,
+            "avg_dom_fields": 0.0,
+            "avg_fields_filled": 0.0,
+            "outcomes": {},
+        }
+
+    # Count by method
+    dom_result = await session.execute(
+        select(func.count(ExternalApplyLog.id)).where(ExternalApplyLog.method == "dom")
+    )
+    dom_success = dom_result.scalar_one()
+
+    vision_result = await session.execute(
+        select(func.count(ExternalApplyLog.id)).where(ExternalApplyLog.method == "vision")
+    )
+    vision_used = vision_result.scalar_one()
+
+    none_result = await session.execute(
+        select(func.count(ExternalApplyLog.id)).where(ExternalApplyLog.method == "none")
+    )
+    dom_failed = none_result.scalar_one()
+
+    # Averages
+    avg_dom_result = await session.execute(select(func.avg(ExternalApplyLog.dom_fields_found)))
+    avg_dom_fields = avg_dom_result.scalar_one() or 0.0
+
+    avg_filled_result = await session.execute(select(func.avg(ExternalApplyLog.fields_filled)))
+    avg_fields_filled = avg_filled_result.scalar_one() or 0.0
+
+    # Outcomes breakdown
+    outcome_rows = await session.execute(
+        select(ExternalApplyLog.outcome, func.count(ExternalApplyLog.id)).group_by(
+            ExternalApplyLog.outcome
+        )
+    )
+    outcomes = {row[0]: row[1] for row in outcome_rows.all()}
+
+    dom_success_rate = dom_success / total_attempts if total_attempts > 0 else 0.0
+
+    return {
+        "total_attempts": total_attempts,
+        "dom_success": dom_success,
+        "dom_failed": dom_failed,
+        "vision_used": vision_used,
+        "dom_success_rate": round(dom_success_rate, 3),
+        "avg_dom_fields": round(float(avg_dom_fields), 1),
+        "avg_fields_filled": round(float(avg_fields_filled), 1),
+        "outcomes": outcomes,
+    }

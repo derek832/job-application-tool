@@ -1,10 +1,12 @@
 """
-SMS rate limiter for the LinkedIn Job Automator.
+Notification rate limiter for the LinkedIn Job Automator.
 
-Enforces a maximum of 10 SMS notifications per rolling 1-hour window by
-querying the ``notification_log`` table for recent successful sends.
+Enforces a maximum of 10 notifications per rolling 1-hour window by
+querying the ``notification_log`` table for recent successful sends
+across ALL channels (ntfy, sms, sms_fallback).
 
-The rate limit prevents notification flooding (Requirement 9.7).
+The rate limit is channel-agnostic — it counts every successful delivery
+regardless of which channel was used (Requirements 9.1, 9.2, 9.4).
 """
 
 from __future__ import annotations
@@ -19,7 +21,8 @@ from src.db.models import NotificationLog
 
 logger = structlog.get_logger(__name__)
 
-# Maximum number of successful SMS sends allowed within the rate window.
+# Maximum number of successful sends allowed within the rate window.
+# This limit applies across ALL channels (ntfy, sms, sms_fallback).
 _MAX_SENDS_PER_WINDOW: int = 10
 
 # Rolling window duration in seconds.
@@ -27,11 +30,12 @@ _WINDOW_SECONDS: int = 3600
 
 
 async def check_rate_limit(session: AsyncSession) -> bool:
-    """Check whether sending an SMS is allowed under the rate limit.
+    """Check whether sending a notification is allowed under the rate limit.
 
     Queries the ``notification_log`` table for rows where ``sent_at`` is within
-    the last 3600 seconds (1 hour) and ``success = 1`` (only successful sends
-    count toward the limit).
+    the last 3600 seconds (1 hour) and ``success = 1``. The query is
+    channel-agnostic — it counts successful sends across all channels (ntfy,
+    sms, sms_fallback) in a single shared counter.
 
     Args:
         session: An active SQLAlchemy async session for database access.
@@ -44,6 +48,8 @@ async def check_rate_limit(session: AsyncSession) -> bool:
     cutoff = datetime.now(tz=UTC) - timedelta(seconds=_WINDOW_SECONDS)
     cutoff_iso = cutoff.isoformat()
 
+    # Count ALL successful sends regardless of channel value.
+    # This ensures ntfy, sms, and sms_fallback all share the same budget.
     stmt = (
         select(func.count())
         .select_from(NotificationLog)
@@ -58,7 +64,7 @@ async def check_rate_limit(session: AsyncSession) -> bool:
 
     if count >= _MAX_SENDS_PER_WINDOW:
         logger.warning(
-            "sms_rate_limit_hit",
+            "notification_rate_limit_hit",
             recent_sends=count,
             window_seconds=_WINDOW_SECONDS,
             max_allowed=_MAX_SENDS_PER_WINDOW,

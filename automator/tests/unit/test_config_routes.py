@@ -239,8 +239,6 @@ class TestSettings:
         assert resp.status_code == 200
         data = resp.json()
         assert data["claude_api_key"] == "***"
-        assert data["gmail_user"] == "***"
-        assert data["gmail_app_password"] == "***"
         assert data["good_fit_threshold"] == 75
         assert data["stretch_threshold"] == 50
 
@@ -250,7 +248,6 @@ class TestSettings:
         payload = {
             "claude_api_key": "sk-ant-real-key-12345",
             "gmail_user": "user@gmail.com",
-            "gmail_app_password": "super-secret",
             "sms_gateway": "5551234567@txt.att.net",
             "good_fit_threshold": 80,
             "stretch_threshold": 55,
@@ -260,9 +257,8 @@ class TestSettings:
         put_data = put_resp.json()
         # PUT response also redacts secrets
         assert put_data["claude_api_key"] == "***"
-        assert put_data["gmail_user"] == "***"
-        assert put_data["gmail_app_password"] == "***"
         # Non-secret fields are returned as-is
+        assert put_data["gmail_user"] == "user@gmail.com"
         assert put_data["sms_gateway"] == "5551234567@txt.att.net"
         assert put_data["good_fit_threshold"] == 80
 
@@ -312,6 +308,194 @@ class TestSettings:
 
 
 # ---------------------------------------------------------------------------
+# Ntfy Config tests
+# ---------------------------------------------------------------------------
+
+
+class TestNtfyConfig:
+    """Tests for GET/PUT /config/ntfy."""
+
+    @pytest.mark.asyncio
+    async def test_get_returns_defaults_when_empty(self, client: AsyncClient) -> None:
+        """GET /config/ntfy returns default config when nothing is stored."""
+        resp = await client.get("/config/ntfy")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["ntfy_enabled"] is False
+        assert data["ntfy_server_url"] == "https://ntfy.sh"
+        assert data["urgent_topic"] is None
+        assert data["info_topic"] is None
+        assert data["lan_base_url"] is None
+
+    @pytest.mark.asyncio
+    async def test_get_does_not_return_api_token(self, client: AsyncClient, db_session: AsyncSession) -> None:
+        """GET /config/ntfy never includes the api_token field."""
+        from src.db.config_repo import set_config
+
+        await set_config(db_session, "api_token", "secret-token-123")
+        await db_session.commit()
+
+        resp = await client.get("/config/ntfy")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "api_token" not in data
+
+    @pytest.mark.asyncio
+    async def test_get_returns_stored_values(self, client: AsyncClient, db_session: AsyncSession) -> None:
+        """GET /config/ntfy returns values previously stored in config."""
+        from src.db.config_repo import set_config
+
+        await set_config(db_session, "ntfy_enabled", True)
+        await set_config(db_session, "ntfy_server_url", "https://custom.ntfy.example.com")
+        await set_config(db_session, "ntfy_urgent_topic", "abc123def456gh78")
+        await set_config(db_session, "ntfy_info_topic", "ij90kl12mn34op56")
+        await set_config(db_session, "lan_base_url", "http://192.168.1.50:7432")
+        await db_session.commit()
+
+        resp = await client.get("/config/ntfy")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["ntfy_enabled"] is True
+        assert data["ntfy_server_url"] == "https://custom.ntfy.example.com"
+        assert data["urgent_topic"] == "abc123def456gh78"
+        assert data["info_topic"] == "ij90kl12mn34op56"
+        assert data["lan_base_url"] == "http://192.168.1.50:7432"
+
+    @pytest.mark.asyncio
+    async def test_put_and_get_round_trip(self, client: AsyncClient) -> None:
+        """PUT /config/ntfy persists data retrievable via GET."""
+        payload = {
+            "ntfy_enabled": True,
+            "ntfy_server_url": "https://ntfy.sh",
+            "lan_base_url": "http://192.168.1.100:7432",
+        }
+        put_resp = await client.put("/config/ntfy", json=payload)
+        assert put_resp.status_code == 200
+        put_data = put_resp.json()
+        assert put_data["ntfy_enabled"] is True
+        assert put_data["ntfy_server_url"] == "https://ntfy.sh"
+        assert put_data["lan_base_url"] == "http://192.168.1.100:7432"
+
+        get_resp = await client.get("/config/ntfy")
+        assert get_resp.status_code == 200
+        get_data = get_resp.json()
+        assert get_data["ntfy_enabled"] is True
+        assert get_data["ntfy_server_url"] == "https://ntfy.sh"
+        assert get_data["lan_base_url"] == "http://192.168.1.100:7432"
+
+    @pytest.mark.asyncio
+    async def test_put_with_null_lan_base_url(self, client: AsyncClient) -> None:
+        """PUT /config/ntfy accepts null lan_base_url."""
+        payload = {
+            "ntfy_enabled": False,
+            "ntfy_server_url": "https://ntfy.sh",
+            "lan_base_url": None,
+        }
+        resp = await client.put("/config/ntfy", json=payload)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["lan_base_url"] is None
+
+    @pytest.mark.asyncio
+    async def test_put_rejects_invalid_server_url(self, client: AsyncClient) -> None:
+        """PUT /config/ntfy rejects server URLs not starting with http:// or https://."""
+        payload = {
+            "ntfy_enabled": True,
+            "ntfy_server_url": "ftp://invalid.example.com",
+            "lan_base_url": None,
+        }
+        resp = await client.put("/config/ntfy", json=payload)
+        assert resp.status_code == 422
+
+    @pytest.mark.asyncio
+    async def test_put_rejects_server_url_without_protocol(self, client: AsyncClient) -> None:
+        """PUT /config/ntfy rejects server URLs without a protocol."""
+        payload = {
+            "ntfy_enabled": True,
+            "ntfy_server_url": "ntfy.sh",
+            "lan_base_url": None,
+        }
+        resp = await client.put("/config/ntfy", json=payload)
+        assert resp.status_code == 422
+
+    @pytest.mark.asyncio
+    async def test_put_accepts_http_server_url(self, client: AsyncClient) -> None:
+        """PUT /config/ntfy accepts http:// server URLs."""
+        payload = {
+            "ntfy_enabled": True,
+            "ntfy_server_url": "http://my-local-ntfy:8080",
+            "lan_base_url": None,
+        }
+        resp = await client.put("/config/ntfy", json=payload)
+        assert resp.status_code == 200
+        assert resp.json()["ntfy_server_url"] == "http://my-local-ntfy:8080"
+
+    @pytest.mark.asyncio
+    async def test_put_rejects_invalid_lan_address(self, client: AsyncClient) -> None:
+        """PUT /config/ntfy rejects invalid LAN addresses."""
+        payload = {
+            "ntfy_enabled": True,
+            "ntfy_server_url": "https://ntfy.sh",
+            "lan_base_url": "not a valid address!!!",
+        }
+        resp = await client.put("/config/ntfy", json=payload)
+        assert resp.status_code == 422
+
+    @pytest.mark.asyncio
+    async def test_put_accepts_valid_lan_ipv4_with_port(self, client: AsyncClient) -> None:
+        """PUT /config/ntfy accepts valid IPv4 with port as LAN address."""
+        payload = {
+            "ntfy_enabled": True,
+            "ntfy_server_url": "https://ntfy.sh",
+            "lan_base_url": "http://10.0.0.5:7432",
+        }
+        resp = await client.put("/config/ntfy", json=payload)
+        assert resp.status_code == 200
+        assert resp.json()["lan_base_url"] == "http://10.0.0.5:7432"
+
+    @pytest.mark.asyncio
+    async def test_put_accepts_valid_lan_hostname(self, client: AsyncClient) -> None:
+        """PUT /config/ntfy accepts valid hostname as LAN address."""
+        payload = {
+            "ntfy_enabled": True,
+            "ntfy_server_url": "https://ntfy.sh",
+            "lan_base_url": "http://my-desktop:7432",
+        }
+        resp = await client.put("/config/ntfy", json=payload)
+        assert resp.status_code == 200
+        assert resp.json()["lan_base_url"] == "http://my-desktop:7432"
+
+    @pytest.mark.asyncio
+    async def test_put_does_not_modify_topics(self, client: AsyncClient, db_session: AsyncSession) -> None:
+        """PUT /config/ntfy does not allow modifying read-only topics."""
+        from src.db.config_repo import get_config, set_config
+
+        # Pre-seed topics
+        await set_config(db_session, "ntfy_urgent_topic", "original_urgent_1")
+        await set_config(db_session, "ntfy_info_topic", "original_info_123")
+        await db_session.commit()
+
+        # PUT with different values (topics not in the schema)
+        payload = {
+            "ntfy_enabled": True,
+            "ntfy_server_url": "https://ntfy.sh",
+            "lan_base_url": None,
+        }
+        resp = await client.put("/config/ntfy", json=payload)
+        assert resp.status_code == 200
+        data = resp.json()
+        # Topics remain unchanged
+        assert data["urgent_topic"] == "original_urgent_1"
+        assert data["info_topic"] == "original_info_123"
+
+        # Verify in DB
+        urgent = await get_config(db_session, "ntfy_urgent_topic")
+        info = await get_config(db_session, "ntfy_info_topic")
+        assert urgent == "original_urgent_1"
+        assert info == "original_info_123"
+
+
+# ---------------------------------------------------------------------------
 # Auth dependency tests
 # ---------------------------------------------------------------------------
 
@@ -336,3 +520,26 @@ class TestAuthDependency:
             resp = await ac.get("/config/search")
             # FastAPI HTTPBearer returns 403 when no credentials are provided
             assert resp.status_code in (401, 403)
+
+    @pytest.mark.asyncio
+    async def test_ntfy_endpoints_require_auth(self, db_session: AsyncSession) -> None:
+        """Ntfy config endpoints require authentication."""
+        # Create app WITHOUT overriding auth
+        app = FastAPI()
+        app.include_router(router)
+
+        async def _get_test_session():
+            yield db_session
+
+        app.dependency_overrides[get_session] = _get_test_session
+
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as ac:
+            get_resp = await ac.get("/config/ntfy")
+            assert get_resp.status_code in (401, 403)
+
+            put_resp = await ac.put(
+                "/config/ntfy",
+                json={"ntfy_enabled": True, "ntfy_server_url": "https://ntfy.sh"},
+            )
+            assert put_resp.status_code in (401, 403)
