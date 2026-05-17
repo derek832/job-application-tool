@@ -1,5 +1,5 @@
 import { useState, useCallback, useRef, useEffect } from "react";
-import { getStatus, getActivityLog, getRunHistory, triggerRun, triggerPreview, getPreviewRun, pause, resume, getChromeStatus, getSessionHealth, launchChrome, ApiError } from "../api/client";
+import { getStatus, getActivityLog, getRunHistory, triggerRun, triggerPreview, getPreviewRun, pause, resume, getChromeStatus, getSessionHealth, ApiError } from "../api/client";
 import type { StatusResponse, LogEntry, RunHistoryItem, ChromeStatusResponse, SessionHealthResponse } from "../api/client";
 import { usePolling } from "../hooks/usePolling";
 
@@ -65,7 +65,7 @@ export function Dashboard({ onPreviewComplete }: DashboardProps): React.JSX.Elem
   const [chromeStatus, setChromeStatus] = useState<ChromeStatusResponse | null>(null);
   const [sessionHealth, setSessionHealth] = useState<SessionHealthResponse | null>(null);
   const [healthCheckLoading, setHealthCheckLoading] = useState(false);
-  const [chromeLaunchLoading, setChromeLaunchLoading] = useState(false);
+  const [chromeCopied, setChromeCopied] = useState(false);
   const [previewStatus, setPreviewStatus] = useState<"idle" | "running" | "completed" | "failed">("idle");
   const [, setPreviewRunId] = useState<string | null>(null);
   const previewPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -164,15 +164,26 @@ export function Dashboard({ onPreviewComplete }: DashboardProps): React.JSX.Elem
   }
 
   async function handleLaunchChrome() {
-    setChromeLaunchLoading(true);
+    // Chrome runs on the host, not inside Docker. Copy the launch command instead.
+    const isWindows = navigator.userAgent.includes("Win");
+    const isMac = navigator.userAgent.includes("Mac");
+
+    let cmd: string;
+    if (isWindows) {
+      cmd = `start "" "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe" --remote-debugging-port=9222 --user-data-dir="%LOCALAPPDATA%\\ChromeAutomation" --no-first-run`;
+    } else if (isMac) {
+      cmd = `/Applications/Google\\ Chrome.app/Contents/MacOS/Google\\ Chrome --remote-debugging-port=9222 --user-data-dir="$HOME/.chrome-automation" --no-first-run`;
+    } else {
+      cmd = `google-chrome --remote-debugging-port=9222 --user-data-dir="$HOME/.chrome-automation" --no-first-run`;
+    }
+
     try {
-      await launchChrome();
-      // Refresh Chrome status after launch
-      await fetchChromeStatus();
-    } catch (e) {
-      setError(e instanceof ApiError ? e.message : "Chrome launch failed");
-    } finally {
-      setChromeLaunchLoading(false);
+      await navigator.clipboard.writeText(cmd);
+      setChromeCopied(true);
+      setTimeout(() => setChromeCopied(false), 2000);
+    } catch {
+      // Fallback: show in a prompt
+      window.prompt("Copy this command and run it in your terminal:", cmd);
     }
   }
 
@@ -414,14 +425,13 @@ export function Dashboard({ onPreviewComplete }: DashboardProps): React.JSX.Elem
             {healthCheckLoading ? "Checking…" : "Check Session Health"}
           </button>
 
-          {/* Show Launch Chrome button only when Chrome is not connected */}
+          {/* Show copy Chrome command when Chrome is not connected */}
           {!chromeStatus?.connected && (
             <button
               onClick={handleLaunchChrome}
-              disabled={chromeLaunchLoading}
-              className="px-3 py-1.5 text-xs font-medium text-gray-700 bg-gray-100 rounded-lg hover:bg-gray-200 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+              className="px-3 py-1.5 text-xs font-medium text-gray-700 bg-gray-100 rounded-lg hover:bg-gray-200 transition-colors"
             >
-              {chromeLaunchLoading ? "Launching…" : "Launch Chrome for Automation"}
+              {chromeCopied ? "✓ Copied!" : "Copy Chrome Launch Command"}
             </button>
           )}
         </div>

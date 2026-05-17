@@ -59,16 +59,14 @@ Replace the 17-step SETUP_GUIDE.md with an in-app setup wizard. First-run gating
 
 ---
 
-### Wave 3: Pipeline Intelligence (~40-55 credits)
-**Spec:** `.kiro/specs/wave-3-pipeline-intelligence/`
+### ~~Wave 3: Pipeline Intelligence~~ ✅ DONE
+**Merged:** `feat/wave-3-pipeline-intelligence`
 
-Make the pipeline smarter and more configurable. Preview mode for trust-building, session health monitoring to prevent wasted runs, flexible scheduling, company/title blacklists to save Claude tokens, and Chrome CDP automation.
-
-- [ ] Preview/dry-run mode (discovery + scoring only, promote jobs to real pipeline)
-- [ ] Session health monitoring (pre-flight Chrome CDP + LinkedIn session check)
-- [ ] Scheduling flexibility (multiple times/day, intervals, weekends, quiet hours)
-- [ ] Company/title blacklist (filter at discovery time, before scoring)
-- [ ] Chrome CDP setup automation (detect + one-click launch from web app)
+- [x] Preview/dry-run mode (discovery + scoring only, promote jobs to real pipeline)
+- [x] Session health monitoring (pre-flight Chrome CDP + LinkedIn session check)
+- [x] Scheduling flexibility (multiple times/day, intervals, weekends, quiet hours)
+- [x] Company/title blacklist (filter at discovery time, before scoring)
+- [x] Chrome CDP setup automation (detect + one-click launch from web app)
 
 ---
 
@@ -81,6 +79,7 @@ Make the pipeline smarter and more configurable. Preview mode for trust-building
 
 ## Completed ✓
 
+- [x] **Wave 3: Pipeline Intelligence** — Preview/dry-run mode, session health monitoring, flexible scheduling (specific times + interval + quiet hours), company/title blacklist, Chrome CDP setup automation. 843 tests passing.
 - [x] **Wave 0: Web App Migration** — Chrome Extension replaced with React SPA + nginx in Docker. Server-side auth, zero-friction startup.
 - [x] **Wave 1: Notifications & Mobile** — ntfy.sh push notifications, LAN server with action buttons, run summaries, LAN IP auto-detection with Detect button in Settings.
 - [x] **Kiro specs & steering** — All wave specs (0-3) and steering files (product, engineering, domain) committed to repo.
