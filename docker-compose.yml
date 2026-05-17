@@ -6,9 +6,8 @@ services:
     image: job-application-tool-automator
     extra_hosts:
       - "host.docker.internal:host-gateway"
-    # Port no longer exposed to host — only accessible within Docker network
-    expose:
-      - "7432"
+    ports:
+      - "0.0.0.0:7432:7432"  # LAN access for ntfy action buttons
     volumes:
       - app-data:/app/data
     environment:
@@ -18,6 +17,7 @@ services:
       - SMS_GATEWAY=${SMS_GATEWAY}
       - API_TOKEN=${API_TOKEN}
       - DATA_DIR=/app/data
+      - LAN_IP=${LAN_IP:-}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       - PLAYWRIGHT_TRACE=${PLAYWRIGHT_TRACE:-0}
       - CHROME_CDP_URL=http://host.docker.internal:9222
