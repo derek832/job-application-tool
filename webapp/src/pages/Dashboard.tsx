@@ -164,26 +164,13 @@ export function Dashboard({ onPreviewComplete }: DashboardProps): React.JSX.Elem
   }
 
   async function handleLaunchChrome() {
-    // Chrome runs on the host, not inside Docker. Copy the launch command instead.
-    const isWindows = navigator.userAgent.includes("Win");
-    const isMac = navigator.userAgent.includes("Mac");
-
-    let cmd: string;
-    if (isWindows) {
-      cmd = `start "" "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe" --remote-debugging-port=9222 --user-data-dir="%LOCALAPPDATA%\\ChromeAutomation" --no-first-run`;
-    } else if (isMac) {
-      cmd = `/Applications/Google\\ Chrome.app/Contents/MacOS/Google\\ Chrome --remote-debugging-port=9222 --user-data-dir="$HOME/.chrome-automation" --no-first-run`;
-    } else {
-      cmd = `google-chrome --remote-debugging-port=9222 --user-data-dir="$HOME/.chrome-automation" --no-first-run`;
-    }
-
+    // Chrome runs on the host, not inside Docker. Point users to the batch file.
     try {
-      await navigator.clipboard.writeText(cmd);
+      await navigator.clipboard.writeText("launch-chrome.bat");
       setChromeCopied(true);
-      setTimeout(() => setChromeCopied(false), 2000);
+      setTimeout(() => setChromeCopied(false), 3000);
     } catch {
-      // Fallback: show in a prompt
-      window.prompt("Copy this command and run it in your terminal:", cmd);
+      // Fallback
     }
   }
 
@@ -425,13 +412,14 @@ export function Dashboard({ onPreviewComplete }: DashboardProps): React.JSX.Elem
             {healthCheckLoading ? "Checking…" : "Check Session Health"}
           </button>
 
-          {/* Show copy Chrome command when Chrome is not connected */}
+          {/* Show helper when Chrome is not connected */}
           {!chromeStatus?.connected && (
             <button
               onClick={handleLaunchChrome}
               className="px-3 py-1.5 text-xs font-medium text-gray-700 bg-gray-100 rounded-lg hover:bg-gray-200 transition-colors"
+              title="Double-click launch-chrome.bat in the project root"
             >
-              {chromeCopied ? "✓ Copied!" : "Copy Chrome Launch Command"}
+              {chromeCopied ? "✓ Run launch-chrome.bat" : "How to Launch Chrome"}
             </button>
           )}
         </div>
