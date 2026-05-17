@@ -266,7 +266,7 @@ This plan implements five sub-features across the existing FastAPI + SQLAlchemy 
     - Register quiet hours flush job at `quiet_hours_end` time
     - _Requirements: 3.1, 3.2, 3.11_
 
-- [-] 19. Final checkpoint — Ensure all tests pass
+- [x] 19. Final checkpoint — Ensure all tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
 ## Notes
