@@ -31,20 +31,22 @@ Wave 0 (Web App Migration) is **complete and deployed**. The Chrome Extension ha
 
 ---
 
-### Wave 1: Notifications & Mobile (~30-45 credits) ← NEXT
-**Spec:** `.kiro/specs/wave-1-notifications-mobile/`
+### ~~Wave 1: Notifications & Mobile~~ ✅ DONE
+**Merged:** `feat/wave-1-notifications-mobile` + `feat/lan-auto-detect`
 
-Replace degraded SMS with ntfy.sh push notifications. Add mobile queue interaction via action buttons. Post-run summaries so you know what happened without checking the dashboard.
-
-- [ ] ntfy.sh client (httpx POST, two auto-generated topics: urgent + info)
-- [ ] Action buttons on notifications (approve/reject from phone over LAN)
-- [ ] Post-run plain-English summary (sent to info topic + displayed in Run History)
-- [ ] SMS retained as optional fallback
-- [ ] Shared 10/hour rate limit across both channels
+- [x] ntfy.sh client (httpx POST, two auto-generated topics: urgent + info)
+- [x] Action buttons on notifications (approve/reject from phone over LAN)
+- [x] Post-run plain-English summary (sent to info topic + displayed in Run History)
+- [x] SMS retained as optional fallback
+- [x] Shared 10/hour rate limit across both channels
+- [x] LAN IP auto-detection endpoint (`GET /config/lan-detect`)
+- [x] "Detect" button in Settings UI (one-click LAN IP population)
+- [x] Docker Compose port 7432 exposed on 0.0.0.0 for LAN access
+- [x] `LAN_IP` env var override for non-standard Docker setups
 
 ---
 
-### Wave 2: New User Experience (~55-75 credits)
+### Wave 2: New User Experience (~55-75 credits) ← NEXT
 **Spec:** `.kiro/specs/wave-2-new-user-experience/`
 
 Replace the 17-step SETUP_GUIDE.md with an in-app setup wizard. First-run gating, guided troubleshooting, and a diagnostics page. A non-technical user should go from `docker compose up` to fully operational without reading docs.
@@ -80,6 +82,7 @@ Make the pipeline smarter and more configurable. Preview mode for trust-building
 ## Completed ✓
 
 - [x] **Wave 0: Web App Migration** — Chrome Extension replaced with React SPA + nginx in Docker. Server-side auth, zero-friction startup.
+- [x] **Wave 1: Notifications & Mobile** — ntfy.sh push notifications, LAN server with action buttons, run summaries, LAN IP auto-detection with Detect button in Settings.
 - [x] **Kiro specs & steering** — All wave specs (0-3) and steering files (product, engineering, domain) committed to repo.
 - [x] **Company name selector hardened** — JSON-LD structured data (schema.org JobPosting) as primary source, DOM selectors as fallback.
 - [x] **Salary range extraction** — Parse salary from descriptions, convert hourly to annual, filter below min_salary before scoring.
