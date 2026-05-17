@@ -150,6 +150,11 @@ export const SettingsSchema = z.object({
   dry_run: z.boolean(),
 });
 
+export const LanDetectResponseSchema = z.object({
+  lan_base_url: z.string(),
+  port: z.number().int(),
+});
+
 // ---------------------------------------------------------------------------
 // Inferred TypeScript Types
 // ---------------------------------------------------------------------------
@@ -163,6 +168,7 @@ export type SearchConfig = z.infer<typeof SearchConfigSchema>;
 export type GoalsProfile = z.infer<typeof GoalsProfileSchema>;
 export type UserProfile = z.infer<typeof UserProfileSchema>;
 export type Settings = z.infer<typeof SettingsSchema>;
+export type LanDetectResponse = z.infer<typeof LanDetectResponseSchema>;
 
 // ---------------------------------------------------------------------------
 // Internal Helpers
@@ -328,6 +334,10 @@ export async function updateSettings(data: Partial<Settings>): Promise<Settings>
     body: JSON.stringify(data),
   });
   return { ...result, external_apply_threshold: result.external_apply_threshold ?? 80, skip_viewed_jobs: result.skip_viewed_jobs ?? true };
+}
+
+export async function detectLanIp(signal?: AbortSignal): Promise<LanDetectResponse> {
+  return request("/config/lan-detect", LanDetectResponseSchema, { signal });
 }
 
 // ---------------------------------------------------------------------------
