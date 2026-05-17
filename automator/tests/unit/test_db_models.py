@@ -20,9 +20,13 @@ from src.db.database import build_engine, get_session, init_db
 from src.db.models import (
     VALID_STATUSES,
     Base,
+    BlacklistEntry,
     Config,
     JobRecord,
     NotificationLog,
+    NotificationQueue,
+    PreviewJob,
+    PreviewRun,
     StatusTransition,
 )
 
@@ -363,3 +367,242 @@ class TestRelationships:
             assert row[0] == "system_startup"
 
         await engine.dispose()
+
+
+# ---------------------------------------------------------------------------
+# Wave 3 — Pipeline Intelligence table creation (Task 1.2)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+class TestWave3TableCreation:
+    """Verify that Wave 3 tables are created on startup with correct indexes.
+
+    Requirements: 1.2, 4.1, 4.2, 3.8
+    """
+
+    async def test_creates_wave3_tables(self) -> None:
+        """All four Wave 3 tables must be created by init_db."""
+        engine = await _make_engine()
+        async with engine.connect() as conn:
+            table_names = await conn.run_sync(
+                lambda sync_conn: inspect(sync_conn).get_table_names()
+            )
+        expected_tables = {
+            "preview_runs",
+            "preview_jobs",
+            "blacklist_entries",
+            "notification_queue",
+        }
+        assert expected_tables <= set(table_names)
+        await engine.dispose()
+
+    async def test_preview_runs_indexes(self) -> None:
+        """preview_runs must have idx_preview_runs_started_at index."""
+        engine = await _make_engine()
+        async with engine.connect() as conn:
+            indexes = await conn.run_sync(
+                lambda sync_conn: inspect(sync_conn).get_indexes("preview_runs")
+            )
+        index_names = {idx["name"] for idx in indexes}
+        assert "idx_preview_runs_started_at" in index_names
+        await engine.dispose()
+
+    async def test_preview_jobs_indexes(self) -> None:
+        """preview_jobs must have idx_preview_jobs_run_id and idx_preview_jobs_job_id."""
+        engine = await _make_engine()
+        async with engine.connect() as conn:
+            indexes = await conn.run_sync(
+                lambda sync_conn: inspect(sync_conn).get_indexes("preview_jobs")
+            )
+        index_names = {idx["name"] for idx in indexes}
+        assert "idx_preview_jobs_run_id" in index_names
+        assert "idx_preview_jobs_job_id" in index_names
+        await engine.dispose()
+
+    async def test_blacklist_entries_indexes(self) -> None:
+        """blacklist_entries must have idx_blacklist_entries_type and idx_blacklist_entries_unique."""
+        engine = await _make_engine()
+        async with engine.connect() as conn:
+            indexes = await conn.run_sync(
+                lambda sync_conn: inspect(sync_conn).get_indexes("blacklist_entries")
+            )
+            unique_constraints = await conn.run_sync(
+                lambda sync_conn: inspect(sync_conn).get_unique_constraints(
+                    "blacklist_entries"
+                )
+            )
+        index_names = {idx["name"] for idx in indexes}
+        constraint_names = {uc["name"] for uc in unique_constraints}
+        # idx_blacklist_entries_type is a regular index
+        assert "idx_blacklist_entries_type" in index_names
+        # idx_blacklist_entries_unique is a unique constraint (creates a unique index in SQLite)
+        assert "idx_blacklist_entries_unique" in constraint_names
+
+        await engine.dispose()
+
+    async def test_notification_queue_indexes(self) -> None:
+        """notification_queue must have idx_notification_queue_delivered index."""
+        engine = await _make_engine()
+        async with engine.connect() as conn:
+            indexes = await conn.run_sync(
+                lambda sync_conn: inspect(sync_conn).get_indexes("notification_queue")
+            )
+        index_names = {idx["name"] for idx in indexes}
+        assert "idx_notification_queue_delivered" in index_names
+        await engine.dispose()
+
+    async def test_preview_jobs_foreign_key_to_preview_runs(self) -> None:
+        """preview_jobs.run_id must reference preview_runs.id with CASCADE delete."""
+        engine = await _make_engine()
+        async with engine.connect() as conn:
+            fks = await conn.run_sync(
+                lambda sync_conn: inspect(sync_conn).get_foreign_keys("preview_jobs")
+            )
+        run_id_fk = next(
+            (fk for fk in fks if "run_id" in fk["constrained_columns"]), None
+        )
+        assert run_id_fk is not None
+        assert run_id_fk["referred_table"] == "preview_runs"
+        assert run_id_fk["referred_columns"] == ["id"]
+        await engine.dispose()
+
+    async def test_notification_queue_foreign_key_to_job_records(self) -> None:
+        """notification_queue.job_id must reference job_records.id."""
+        engine = await _make_engine()
+        async with engine.connect() as conn:
+            fks = await conn.run_sync(
+                lambda sync_conn: inspect(sync_conn).get_foreign_keys(
+                    "notification_queue"
+                )
+            )
+        job_id_fk = next(
+            (fk for fk in fks if "job_id" in fk["constrained_columns"]), None
+        )
+        assert job_id_fk is not None
+        assert job_id_fk["referred_table"] == "job_records"
+        assert job_id_fk["referred_columns"] == ["id"]
+        await engine.dispose()
+
+
+# ---------------------------------------------------------------------------
+# Wave 3 — Model instantiation tests
+# ---------------------------------------------------------------------------
+
+
+class TestPreviewRunModel:
+    """Basic ORM model construction for PreviewRun."""
+
+    def test_instantiation(self) -> None:
+        run = PreviewRun(
+            id="test-uuid-123",
+            status="running",
+            started_at="2024-03-15T09:00:00Z",
+            total_discovered=0,
+            total_scored=0,
+            total_blacklisted=0,
+        )
+        assert run.id == "test-uuid-123"
+        assert run.status == "running"
+        assert run.completed_at is None
+        assert run.error_message is None
+
+    def test_repr(self) -> None:
+        run = PreviewRun(
+            id="abc-123",
+            status="completed",
+            started_at="2024-03-15T09:00:00Z",
+            total_discovered=5,
+            total_scored=3,
+            total_blacklisted=2,
+        )
+        r = repr(run)
+        assert "abc-123" in r
+        assert "completed" in r
+
+
+class TestPreviewJobModel:
+    """Basic ORM model construction for PreviewJob."""
+
+    def test_instantiation(self) -> None:
+        job = PreviewJob(
+            run_id="run-uuid-1",
+            job_id="3987654321",
+            job_title="Senior Engineer",
+            company="Acme Corp",
+            linkedin_url="https://linkedin.com/jobs/view/3987654321",
+            fit_score=82,
+            fit_rationale="Strong match.",
+            projected_action="auto_apply",
+            promoted=0,
+        )
+        assert job.job_id == "3987654321"
+        assert job.projected_action == "auto_apply"
+        assert job.promoted == 0
+        assert job.promoted_at is None
+
+    def test_repr(self) -> None:
+        job = PreviewJob(
+            run_id="run-1",
+            job_id="999",
+            job_title="Dev",
+            company="Corp",
+            linkedin_url="https://example.com",
+            projected_action="skip",
+            promoted=0,
+        )
+        r = repr(job)
+        assert "999" in r
+        assert "skip" in r
+
+
+class TestBlacklistEntryModel:
+    """Basic ORM model construction for BlacklistEntry."""
+
+    def test_instantiation(self) -> None:
+        entry = BlacklistEntry(
+            entry_type="company",
+            value="Revature",
+            created_at="2024-03-15T09:00:00Z",
+            hit_count=0,
+        )
+        assert entry.entry_type == "company"
+        assert entry.value == "Revature"
+        assert entry.hit_count == 0
+
+    def test_repr(self) -> None:
+        entry = BlacklistEntry(
+            entry_type="title_pattern",
+            value="intern",
+            created_at="2024-03-15T09:00:00Z",
+            hit_count=14,
+        )
+        r = repr(entry)
+        assert "title_pattern" in r
+        assert "intern" in r
+
+
+class TestNotificationQueueModel:
+    """Basic ORM model construction for NotificationQueue."""
+
+    def test_instantiation(self) -> None:
+        item = NotificationQueue(
+            job_id=None,
+            trigger_reason="new_application",
+            message_body="Applied to Senior Engineer at Acme",
+            queued_at="2024-03-15T22:30:00Z",
+            delivered=0,
+        )
+        assert item.trigger_reason == "new_application"
+        assert item.delivered == 0
+        assert item.job_id is None
+
+    def test_repr(self) -> None:
+        item = NotificationQueue(
+            trigger_reason="stretch_role",
+            message_body="Review needed",
+            queued_at="2024-03-15T22:30:00Z",
+            delivered=1,
+        )
+        r = repr(item)
+        assert "stretch_role" in r

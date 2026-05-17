@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from "react";
-import { getSettings, updateSettings, getNtfyConfig, updateNtfyConfig, detectLanIp, ApiError } from "../api/client";
-import type { Settings as SettingsType, NtfyConfigResponse, NtfyConfigUpdate } from "../api/client";
+import { getSettings, updateSettings, getNtfyConfig, updateNtfyConfig, detectLanIp, getScheduleConfig, updateScheduleConfig, getScheduleNext, ApiError } from "../api/client";
+import type { Settings as SettingsType, NtfyConfigResponse, NtfyConfigUpdate, ScheduleConfigUpdate } from "../api/client";
 
 // ---------------------------------------------------------------------------
 // Validation helpers
@@ -66,6 +66,26 @@ export function Settings(): React.JSX.Element {
   const [detectError, setDetectError] = useState<string | null>(null);
   const detectErrorTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  // Schedule configuration state
+  const [scheduleForm, setScheduleForm] = useState<ScheduleConfigUpdate>({
+    mode: "specific_times",
+    times: ["09:00", "13:00", "17:00"],
+    interval_hours: 2,
+    window_start: "08:00",
+    window_end: "20:00",
+    weekend_runs: false,
+    timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+    quiet_hours_start: null,
+    quiet_hours_end: null,
+  });
+  const [scheduleLoading, setScheduleLoading] = useState(true);
+  const [scheduleSaving, setScheduleSaving] = useState(false);
+  const [scheduleError, setScheduleError] = useState<string | null>(null);
+  const [scheduleSuccess, setScheduleSuccess] = useState(false);
+  const [scheduleValidationError, setScheduleValidationError] = useState<string | null>(null);
+  const [nextRuns, setNextRuns] = useState<string[]>([]);
+  const [nextRunsLoading, setNextRunsLoading] = useState(false);
+
   const clearDetectError = useCallback(() => {
     setDetectError(null);
     if (detectErrorTimerRef.current) {
@@ -125,6 +145,35 @@ export function Settings(): React.JSX.Element {
       }
     }
     load();
+  }, []);
+
+  // Load schedule config separately (non-blocking)
+  useEffect(() => {
+    async function loadSchedule() {
+      try {
+        const [scheduleData, nextData] = await Promise.all([
+          getScheduleConfig(),
+          getScheduleNext().catch(() => ({ next_runs: [] })),
+        ]);
+        setScheduleForm({
+          mode: scheduleData.mode,
+          times: scheduleData.times,
+          interval_hours: scheduleData.interval_hours,
+          window_start: scheduleData.window_start,
+          window_end: scheduleData.window_end,
+          weekend_runs: scheduleData.weekend_runs,
+          timezone: scheduleData.timezone,
+          quiet_hours_start: scheduleData.quiet_hours_start,
+          quiet_hours_end: scheduleData.quiet_hours_end,
+        });
+        setNextRuns(nextData.next_runs);
+      } catch (e) {
+        setScheduleError(e instanceof ApiError ? e.message : "Failed to load schedule config");
+      } finally {
+        setScheduleLoading(false);
+      }
+    }
+    loadSchedule();
   }, []);
 
   // Cleanup detect error timer on unmount
@@ -187,6 +236,80 @@ export function Settings(): React.JSX.Element {
       setNtfyError(e instanceof ApiError ? e.message : "Failed to save ntfy settings");
     } finally {
       setSavingNtfy(false);
+    }
+  }
+
+  // Schedule configuration handlers
+  function handleAddTime() {
+    setScheduleForm((f) => ({ ...f, times: [...f.times, "12:00"] }));
+    setScheduleValidationError(null);
+  }
+
+  function handleRemoveTime(index: number) {
+    setScheduleForm((f) => ({
+      ...f,
+      times: f.times.filter((_, i) => i !== index),
+    }));
+  }
+
+  function handleTimeChange(index: number, value: string) {
+    setScheduleForm((f) => ({
+      ...f,
+      times: f.times.map((t, i) => (i === index ? value : t)),
+    }));
+  }
+
+  async function handleScheduleSave(e: React.FormEvent) {
+    e.preventDefault();
+    setScheduleError(null);
+    setScheduleSuccess(false);
+    setScheduleValidationError(null);
+
+    // Client-side validation: prevent saving with zero times in specific_times mode
+    if (scheduleForm.mode === "specific_times" && scheduleForm.times.length === 0) {
+      setScheduleValidationError("At least one run time is required in Specific Times mode.");
+      return;
+    }
+
+    setScheduleSaving(true);
+    try {
+      const updated = await updateScheduleConfig(scheduleForm);
+      setScheduleForm({
+        mode: updated.mode,
+        times: updated.times,
+        interval_hours: updated.interval_hours,
+        window_start: updated.window_start,
+        window_end: updated.window_end,
+        weekend_runs: updated.weekend_runs,
+        timezone: updated.timezone,
+        quiet_hours_start: updated.quiet_hours_start,
+        quiet_hours_end: updated.quiet_hours_end,
+      });
+      setScheduleSuccess(true);
+      setTimeout(() => setScheduleSuccess(false), 2000);
+
+      // Refresh next runs after saving
+      fetchNextRuns();
+    } catch (e) {
+      if (e instanceof ApiError && e.status === 422) {
+        setScheduleValidationError(e.detail || "Invalid schedule configuration");
+      } else {
+        setScheduleError(e instanceof ApiError ? e.message : "Failed to save schedule");
+      }
+    } finally {
+      setScheduleSaving(false);
+    }
+  }
+
+  async function fetchNextRuns() {
+    setNextRunsLoading(true);
+    try {
+      const data = await getScheduleNext();
+      setNextRuns(data.next_runs);
+    } catch {
+      // Silently fail — next runs are informational
+    } finally {
+      setNextRunsLoading(false);
     }
   }
 
@@ -375,6 +498,242 @@ export function Settings(): React.JSX.Element {
             {savingNtfy ? "Saving..." : ntfySuccess ? "✓ Saved" : "Save Ntfy Settings"}
           </button>
         </form>
+      </section>
+
+      {/* Schedule Configuration */}
+      <section className="bg-white border border-gray-200 rounded-lg p-4 space-y-4">
+        <div className="flex items-center gap-2">
+          <h3 className="text-sm font-semibold text-gray-900">Pipeline Schedule</h3>
+          <span className="text-xs text-gray-400">When to run the pipeline</span>
+        </div>
+
+        {scheduleError && (
+          <div className="bg-red-50 border border-red-200 rounded-lg p-3 text-sm text-red-700">
+            {scheduleError}
+          </div>
+        )}
+
+        {scheduleValidationError && (
+          <div className="bg-red-50 border border-red-200 rounded-lg p-3 text-sm text-red-700">
+            {scheduleValidationError}
+          </div>
+        )}
+
+        {scheduleLoading ? (
+          <div className="space-y-3 animate-pulse">
+            <div className="h-10 bg-gray-200 rounded-lg" />
+            <div className="h-10 bg-gray-200 rounded-lg" />
+            <div className="h-10 bg-gray-200 rounded-lg" />
+          </div>
+        ) : (
+          <form onSubmit={handleScheduleSave} className="space-y-4">
+            {/* Mode Toggle */}
+            <div>
+              <label className="block text-xs font-medium text-gray-600 mb-1.5">Schedule Mode</label>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => setScheduleForm((f) => ({ ...f, mode: "specific_times" }))}
+                  className={`flex-1 px-3 py-2 text-sm font-medium rounded-lg border transition-colors ${
+                    scheduleForm.mode === "specific_times"
+                      ? "bg-blue-600 text-white border-blue-600"
+                      : "bg-white text-gray-700 border-gray-200 hover:bg-gray-50"
+                  }`}
+                >
+                  Specific Times
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setScheduleForm((f) => ({ ...f, mode: "interval" }))}
+                  className={`flex-1 px-3 py-2 text-sm font-medium rounded-lg border transition-colors ${
+                    scheduleForm.mode === "interval"
+                      ? "bg-blue-600 text-white border-blue-600"
+                      : "bg-white text-gray-700 border-gray-200 hover:bg-gray-50"
+                  }`}
+                >
+                  Interval
+                </button>
+              </div>
+            </div>
+
+            {/* Specific Times Mode */}
+            {scheduleForm.mode === "specific_times" && (
+              <div className="space-y-2">
+                <label className="block text-xs font-medium text-gray-600">Run Times</label>
+                {scheduleForm.times.map((time, index) => (
+                  <div key={index} className="flex items-center gap-2">
+                    <input
+                      type="time"
+                      value={time}
+                      onChange={(e) => handleTimeChange(index, e.target.value)}
+                      className="flex-1 px-3 py-2 text-sm border border-gray-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => handleRemoveTime(index)}
+                      className="px-2.5 py-2 text-sm text-red-600 bg-red-50 border border-red-200 rounded-lg hover:bg-red-100 transition-colors"
+                      title="Remove time"
+                    >
+                      ✕
+                    </button>
+                  </div>
+                ))}
+                <button
+                  type="button"
+                  onClick={handleAddTime}
+                  className="w-full px-3 py-2 text-sm font-medium text-blue-600 bg-blue-50 border border-blue-200 rounded-lg hover:bg-blue-100 transition-colors"
+                >
+                  + Add Time
+                </button>
+                {scheduleForm.times.length === 0 && (
+                  <p className="text-xs text-red-500">At least one run time is required.</p>
+                )}
+              </div>
+            )}
+
+            {/* Interval Mode */}
+            {scheduleForm.mode === "interval" && (
+              <div className="space-y-3">
+                <FormField label="Run Every (hours)">
+                  <input
+                    type="number"
+                    min={1}
+                    max={24}
+                    value={scheduleForm.interval_hours}
+                    onChange={(e) =>
+                      setScheduleForm((f) => ({ ...f, interval_hours: parseInt(e.target.value, 10) || 1 }))
+                    }
+                    className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  />
+                </FormField>
+                <div className="grid grid-cols-2 gap-3">
+                  <FormField label="Window Start">
+                    <input
+                      type="time"
+                      value={scheduleForm.window_start}
+                      onChange={(e) => setScheduleForm((f) => ({ ...f, window_start: e.target.value }))}
+                      className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    />
+                  </FormField>
+                  <FormField label="Window End">
+                    <input
+                      type="time"
+                      value={scheduleForm.window_end}
+                      onChange={(e) => setScheduleForm((f) => ({ ...f, window_end: e.target.value }))}
+                      className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    />
+                  </FormField>
+                </div>
+                <p className="text-xs text-gray-400">
+                  Pipeline runs every {scheduleForm.interval_hours} hour{scheduleForm.interval_hours !== 1 ? "s" : ""} between {scheduleForm.window_start} and {scheduleForm.window_end}.
+                </p>
+              </div>
+            )}
+
+            {/* Weekend Runs Toggle */}
+            <div className="flex items-center justify-between bg-gray-50 rounded-lg border border-gray-100 px-4 py-3">
+              <div>
+                <p className="text-sm font-medium text-gray-900">Weekend Runs</p>
+                <p className="text-xs text-gray-500 mt-0.5">
+                  Run the pipeline on Saturday and Sunday.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setScheduleForm((f) => ({ ...f, weekend_runs: !f.weekend_runs }))}
+                className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-colors ${
+                  scheduleForm.weekend_runs
+                    ? "bg-blue-600 text-white"
+                    : "bg-gray-200 text-gray-700"
+                }`}
+              >
+                {scheduleForm.weekend_runs ? "ON" : "OFF"}
+              </button>
+            </div>
+
+            {/* Quiet Hours */}
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <label className="block text-xs font-medium text-gray-600">Quiet Hours</label>
+                <button
+                  type="button"
+                  onClick={() =>
+                    setScheduleForm((f) => ({
+                      ...f,
+                      quiet_hours_start: f.quiet_hours_start ? null : "22:00",
+                      quiet_hours_end: f.quiet_hours_end ? null : "07:00",
+                    }))
+                  }
+                  className={`px-2 py-1 text-xs font-medium rounded transition-colors ${
+                    scheduleForm.quiet_hours_start
+                      ? "bg-blue-600 text-white"
+                      : "bg-gray-200 text-gray-700"
+                  }`}
+                >
+                  {scheduleForm.quiet_hours_start ? "ON" : "OFF"}
+                </button>
+              </div>
+              {scheduleForm.quiet_hours_start && (
+                <div className="grid grid-cols-2 gap-3">
+                  <FormField label="Start (notifications pause)">
+                    <input
+                      type="time"
+                      value={scheduleForm.quiet_hours_start ?? "22:00"}
+                      onChange={(e) => setScheduleForm((f) => ({ ...f, quiet_hours_start: e.target.value }))}
+                      className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    />
+                  </FormField>
+                  <FormField label="End (batch delivery)">
+                    <input
+                      type="time"
+                      value={scheduleForm.quiet_hours_end ?? "07:00"}
+                      onChange={(e) => setScheduleForm((f) => ({ ...f, quiet_hours_end: e.target.value }))}
+                      className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    />
+                  </FormField>
+                </div>
+              )}
+              <p className="text-xs text-gray-400">
+                During quiet hours, notifications are queued and delivered as a batch summary when quiet hours end.
+              </p>
+            </div>
+
+            {/* Next Upcoming Runs */}
+            <div className="bg-gray-50 rounded-lg border border-gray-100 px-4 py-3">
+              <div className="flex items-center justify-between mb-2">
+                <p className="text-xs font-medium text-gray-600">Next Scheduled Runs</p>
+                {nextRunsLoading && (
+                  <span className="text-xs text-gray-400">Loading...</span>
+                )}
+              </div>
+              {nextRuns.length > 0 ? (
+                <ul className="space-y-1">
+                  {nextRuns.map((run, i) => (
+                    <li key={i} className="text-sm text-gray-700">
+                      {new Date(run).toLocaleString(undefined, {
+                        weekday: "short",
+                        month: "short",
+                        day: "numeric",
+                        hour: "2-digit",
+                        minute: "2-digit",
+                      })}
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="text-sm text-gray-400">No upcoming runs scheduled.</p>
+              )}
+            </div>
+
+            <button
+              type="submit"
+              disabled={scheduleSaving}
+              className="w-full px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 disabled:opacity-50 transition-colors"
+            >
+              {scheduleSaving ? "Saving..." : scheduleSuccess ? "✓ Saved" : "Save Schedule"}
+            </button>
+          </form>
+        )}
       </section>
 
       {/* General Settings (existing form) */}

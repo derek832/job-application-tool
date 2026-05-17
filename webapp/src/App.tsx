@@ -12,30 +12,14 @@ import { SearchConfig } from "./pages/SearchConfig";
 import { GoalsProfile } from "./pages/GoalsProfile";
 import { ProfileConfig } from "./pages/ProfileConfig";
 import { Settings } from "./pages/Settings";
+import { PreviewResults } from "./pages/PreviewResults";
+import { BlacklistConfig } from "./pages/BlacklistConfig";
 
 const POLL_INTERVAL_MS = 60_000;
 
-function renderPage(page: Page): React.JSX.Element {
-  switch (page) {
-    case "dashboard":
-      return <Dashboard />;
-    case "queue":
-      return <HumanQueue />;
-    case "history":
-      return <JobHistory />;
-    case "search":
-      return <SearchConfig />;
-    case "goals":
-      return <GoalsProfile />;
-    case "profile":
-      return <ProfileConfig />;
-    case "settings":
-      return <Settings />;
-  }
-}
-
-export default function App() {
+function App() {
   const [activePage, setActivePage] = useState<Page>("dashboard");
+  const [previewRunId, setPreviewRunId] = useState<string | null>(null);
   const [queueCount, setQueueCount] = useState(0);
   const [connection, setConnection] = useState<ConnectionState>({
     connected: true,
@@ -66,6 +50,34 @@ export default function App() {
   usePolling(pollQueue, POLL_INTERVAL_MS);
   useBadge(queueCount);
 
+  function navigateToPreview(runId: string) {
+    setPreviewRunId(runId);
+    setActivePage("preview");
+  }
+
+  function renderPage(page: Page): React.JSX.Element {
+    switch (page) {
+      case "dashboard":
+        return <Dashboard onPreviewComplete={navigateToPreview} />;
+      case "queue":
+        return <HumanQueue />;
+      case "history":
+        return <JobHistory />;
+      case "search":
+        return <SearchConfig />;
+      case "goals":
+        return <GoalsProfile />;
+      case "profile":
+        return <ProfileConfig />;
+      case "settings":
+        return <Settings />;
+      case "preview":
+        return <PreviewResults runId={previewRunId} />;
+      case "blacklist":
+        return <BlacklistConfig />;
+    }
+  }
+
   return (
     <div className="flex h-screen bg-gray-50">
       <Navigation activePage={activePage} onNavigate={setActivePage} />
@@ -81,3 +93,5 @@ export default function App() {
     </div>
   );
 }
+
+export default App;

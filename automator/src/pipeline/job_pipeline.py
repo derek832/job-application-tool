@@ -27,9 +27,10 @@ from src.db.job_repo import TERMINAL_STATUSES, create_job_record
 from src.db.models import JobRecord
 from src.integrations.gdocs_client import GDocsClient
 from src.integrations.linkedin_scraper import discover_and_extract_jobs
-from src.integrations.ntfy_client import NtfySettings
+from src.integrations.ntfy_client import NtfyPayload, NtfySettings, publish
 from src.integrations.sms_gateway import SMSSettings
 from src.pipeline.easy_apply_stage import run_easy_apply
+from src.pipeline.health_checker import check_session_health
 from src.pipeline.notification_service import NotificationSettings, send_run_summary
 from src.pipeline.run_summary import RunStats, generate_summary_text, store_run_summary
 from src.pipeline.scoring_stage import run_scoring
@@ -176,6 +177,42 @@ async def run_pipeline(session: AsyncSession | None = None) -> None:
         keyword_config = await get_config(session, "filter_keywords") or {}
         filter_keywords = keyword_config.get("keywords", [])
 
+    # Step 3.6: Session health check before launching browser
+    cdp_url = os.environ.get("CHROME_CDP_URL", "http://host.docker.internal:9222")
+    health_result = await check_session_health(cdp_url)
+
+    if health_result.error_message:
+        # Health check failed — skip the pipeline run and notify
+        logger.warning(
+            "pipeline_health_check_failed",
+            chrome_reachable=health_result.chrome_reachable,
+            linkedin_authenticated=health_result.linkedin_authenticated,
+            error=health_result.error_message,
+        )
+        # Send ntfy notification with specific failure reason
+        if notification_settings.ntfy_enabled and notification_settings.ntfy:
+            payload = NtfyPayload(
+                topic=notification_settings.ntfy.urgent_topic,
+                title="Job Automator",
+                message=f"Pipeline skipped — {health_result.error_message}",
+                priority=4,
+                tags=["warning"],
+                actions=None,
+            )
+            await publish(payload, notification_settings.ntfy)
+        logger.info("pipeline_run_skipped_health_check_failed")
+        return
+    else:
+        # Health check passed — update system_state.last_health_check_at
+        current_state = await get_config(session, "system_state") or {}
+        current_state["last_health_check_at"] = health_result.checked_at
+        await set_config(session, "system_state", current_state)
+        await session.flush()
+        logger.info(
+            "pipeline_health_check_passed",
+            checked_at=health_result.checked_at,
+        )
+
     # Step 4: Launch Playwright persistent context
     logger.info("pipeline_launching_browser", user_data_dir=_USER_DATA_DIR)
     browser_context: BrowserContext | None = None
@@ -185,7 +222,6 @@ async def run_pipeline(session: AsyncSession | None = None) -> None:
 
         # Connect to the user's Chrome instance via CDP (remote debugging)
         # This uses the real browser session — no login needed
-        cdp_url = os.environ.get("CHROME_CDP_URL", "http://host.docker.internal:9222")
         logger.info("pipeline_connecting_to_chrome", cdp_url=cdp_url)
 
         try:
@@ -291,6 +327,62 @@ async def run_pipeline(session: AsyncSession | None = None) -> None:
                     )
 
             await session.flush()
+
+            # Step 7.5: Blacklist filtering — check extracted jobs before scoring
+            from src.db.blacklist_repo import build_blacklist_config, get_all_entries
+            from src.db.blacklist_repo import increment_hit_count as _increment_hit_count
+            from src.pipeline.blacklist_filter import check_blacklist
+
+            blacklist_config = await build_blacklist_config(session)
+            # Build a lookup map: (entry_type, value_lower) -> entry_id
+            all_bl_entries = await get_all_entries(session)
+            _bl_entry_lookup: dict[tuple[str, str], int] = {
+                (e.entry_type, e.value.lower()): e.id for e in all_bl_entries
+            }
+
+            extracted_for_bl = await _get_jobs_by_status(session, "extracted")
+            blacklisted_count = 0
+
+            for job_record in extracted_for_bl:
+                is_blacklisted, matched_entry = check_blacklist(
+                    company=job_record.company or "",
+                    title=job_record.job_title or "",
+                    blacklist=blacklist_config,
+                )
+                if is_blacklisted:
+                    from src.db.job_repo import update_job_status
+
+                    await update_job_status(
+                        session,
+                        job_record.id,
+                        "skipped",
+                        reason=f"blacklisted: {matched_entry}",
+                    )
+                    logger.info(
+                        "pipeline_blacklist_skipped",
+                        job_id=job_record.id,
+                        title=job_record.job_title,
+                        company=job_record.company,
+                        matched_entry=matched_entry,
+                    )
+                    # Increment hit_count on the matched blacklist entry
+                    if matched_entry:
+                        # Parse "company:Revature" or "title:intern"
+                        entry_type_key, entry_value = matched_entry.split(":", 1)
+                        bl_type = (
+                            "company" if entry_type_key == "company" else "title_pattern"
+                        )
+                        entry_id = _bl_entry_lookup.get((bl_type, entry_value.lower()))
+                        if entry_id is not None:
+                            await _increment_hit_count(session, entry_id)
+                    blacklisted_count += 1
+
+            if blacklisted_count > 0:
+                logger.info(
+                    "pipeline_blacklist_filtering_completed",
+                    blacklisted=blacklisted_count,
+                )
+                await session.flush()
 
             # Step 8: Run scoring for jobs in "extracted" status
             if claude_client:

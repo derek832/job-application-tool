@@ -251,7 +251,11 @@ async def test_sms_not_called_when_ntfy_succeeds(
     ), patch(
         "src.pipeline.notification_service.send_sms",
         new_callable=AsyncMock,
-    ) as mock_send_sms:
+    ) as mock_send_sms, patch(
+        "src.pipeline.notification_service._is_quiet_hours_active",
+        new_callable=AsyncMock,
+        return_value=False,
+    ):
         await notify(mock_session, job, "stretch_role", settings_obj)
 
         # ntfy should have been called
@@ -324,7 +328,11 @@ async def test_sms_fallback_only_on_ntfy_failure(
         "src.pipeline.notification_service.send_sms",
         new_callable=AsyncMock,
         return_value=SMSResult(ok=True),
-    ) as mock_send_sms:
+    ) as mock_send_sms, patch(
+        "src.pipeline.notification_service._is_quiet_hours_active",
+        new_callable=AsyncMock,
+        return_value=False,
+    ):
         await notify(mock_session, job, "stretch_role", settings_obj)
 
         # SMS should be called as fallback ONLY if sms_enabled and sms settings present

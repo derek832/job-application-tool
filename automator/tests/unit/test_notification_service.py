@@ -115,6 +115,17 @@ def mock_session() -> AsyncMock:
     return session
 
 
+@pytest.fixture(autouse=True)
+def mock_quiet_hours_inactive():
+    """Patch quiet hours to always be inactive for notification routing tests."""
+    with patch(
+        "src.pipeline.notification_service._is_quiet_hours_active",
+        new_callable=AsyncMock,
+        return_value=False,
+    ):
+        yield
+
+
 # ---------------------------------------------------------------------------
 # determine_channel tests
 # ---------------------------------------------------------------------------
@@ -479,3 +490,104 @@ class TestSendRunSummary:
         assert log_entry.channel == "ntfy"
         assert log_entry.success == 0
         assert log_entry.error_message == "server down"
+
+
+# ---------------------------------------------------------------------------
+# Quiet hours integration tests
+# ---------------------------------------------------------------------------
+
+
+class TestQuietHoursIntegration:
+    """Tests for quiet hours integration in notification service."""
+
+    @pytest.mark.asyncio
+    @patch("src.pipeline.notification_service._is_quiet_hours_active", new_callable=AsyncMock)
+    @patch("src.pipeline.notification_service.queue_notification", new_callable=AsyncMock)
+    @patch("src.pipeline.notification_service.publish")
+    @patch("src.pipeline.notification_service.check_rate_limit")
+    async def test_notify_queues_during_quiet_hours(
+        self,
+        mock_rate_limit: AsyncMock,
+        mock_publish: AsyncMock,
+        mock_queue: AsyncMock,
+        mock_quiet_hours: AsyncMock,
+        mock_session: AsyncMock,
+        job_record: JobRecord,
+        notification_settings_ntfy_only: NotificationSettings,
+    ) -> None:
+        """During quiet hours, notify() queues instead of delivering immediately."""
+        mock_quiet_hours.return_value = True
+        mock_rate_limit.return_value = True
+
+        await notify(mock_session, job_record, "stretch_role", notification_settings_ntfy_only)
+
+        # Should queue the notification
+        mock_queue.assert_awaited_once()
+        call_kwargs = mock_queue.call_args[1]
+        assert call_kwargs["session"] is mock_session
+        assert call_kwargs["job_id"] == job_record.id
+        assert call_kwargs["trigger_reason"] == "stretch_role"
+        assert "Senior Software Engineer" in call_kwargs["message_body"]
+        assert "Acme Corp" in call_kwargs["message_body"]
+
+        # Should NOT attempt delivery
+        mock_publish.assert_not_awaited()
+        mock_rate_limit.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    @patch("src.pipeline.notification_service._is_quiet_hours_active", new_callable=AsyncMock)
+    @patch("src.pipeline.notification_service.queue_notification", new_callable=AsyncMock)
+    @patch("src.pipeline.notification_service.publish")
+    async def test_send_run_summary_queues_during_quiet_hours(
+        self,
+        mock_publish: AsyncMock,
+        mock_queue: AsyncMock,
+        mock_quiet_hours: AsyncMock,
+        mock_session: AsyncMock,
+        notification_settings_ntfy_only: NotificationSettings,
+    ) -> None:
+        """During quiet hours, send_run_summary() queues instead of delivering."""
+        mock_quiet_hours.return_value = True
+
+        await send_run_summary(
+            mock_session, "Run complete: found 10 jobs.", notification_settings_ntfy_only
+        )
+
+        # Should queue the notification
+        mock_queue.assert_awaited_once()
+        call_kwargs = mock_queue.call_args[1]
+        assert call_kwargs["session"] is mock_session
+        assert call_kwargs["job_id"] is None
+        assert call_kwargs["trigger_reason"] == "run_summary"
+        assert call_kwargs["message_body"] == "Run complete: found 10 jobs."
+
+        # Should NOT attempt delivery
+        mock_publish.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    @patch("src.pipeline.notification_service._is_quiet_hours_active", new_callable=AsyncMock)
+    @patch("src.pipeline.notification_service.queue_notification", new_callable=AsyncMock)
+    @patch("src.pipeline.notification_service.publish")
+    @patch("src.pipeline.notification_service.check_rate_limit")
+    async def test_notify_delivers_outside_quiet_hours(
+        self,
+        mock_rate_limit: AsyncMock,
+        mock_publish: AsyncMock,
+        mock_queue: AsyncMock,
+        mock_quiet_hours: AsyncMock,
+        mock_session: AsyncMock,
+        job_record: JobRecord,
+        notification_settings_ntfy_only: NotificationSettings,
+    ) -> None:
+        """Outside quiet hours, notify() delivers immediately (not queued)."""
+        mock_quiet_hours.return_value = False
+        mock_rate_limit.return_value = True
+        mock_publish.return_value = NtfyResult(ok=True, status_code=200)
+
+        await notify(mock_session, job_record, "stretch_role", notification_settings_ntfy_only)
+
+        # Should NOT queue
+        mock_queue.assert_not_awaited()
+
+        # Should deliver via ntfy
+        mock_publish.assert_awaited_once()

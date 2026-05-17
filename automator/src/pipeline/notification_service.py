@@ -4,10 +4,13 @@ Routes notifications through the configured channel(s): ntfy (primary) or
 SMS (fallback). Enforces the shared rate limit, logs every attempt to the
 ``notification_log`` table, and handles fallback on ntfy failure.
 
+During configured quiet hours, notifications are queued for batch delivery
+rather than sent immediately.
+
 Every notification attempt — whether successful, failed, or rate-limited —
 is recorded in the database for auditability and rate-limit enforcement.
 
-Validates: Requirements 8.1, 8.2, 8.3, 8.5, 9.3
+Validates: Requirements 8.1, 8.2, 8.3, 8.5, 9.3, 3.8
 """
 
 from __future__ import annotations
@@ -18,10 +21,12 @@ from datetime import UTC, datetime
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.db.config_repo import get_config
 from src.db.models import JobRecord, NotificationLog
 from src.integrations.ntfy_client import NtfyPayload, NtfyResult, NtfySettings, publish
 from src.integrations.sms_gateway import SMSSettings, compose_sms, send_sms
 from src.integrations.sms_rate_limiter import check_rate_limit
+from src.pipeline.quiet_hours import is_quiet_hours, queue_notification
 
 logger = structlog.get_logger(__name__)
 
@@ -99,6 +104,34 @@ async def _log_attempt(
     await session.flush()
 
 
+async def _is_quiet_hours_active(session: AsyncSession) -> bool:
+    """Check if quiet hours are currently active based on schedule config.
+
+    Loads the schedule_config from the database and checks whether the
+    current time falls within the configured quiet hours window.
+
+    Args:
+        session: Active async database session.
+
+    Returns:
+        True if quiet hours are active, False otherwise (including when
+        quiet hours are not configured).
+    """
+    schedule_config = await get_config(session, "schedule_config")
+    if not schedule_config:
+        return False
+
+    quiet_start = schedule_config.get("quiet_hours_start")
+    quiet_end = schedule_config.get("quiet_hours_end")
+    timezone = schedule_config.get("timezone", "UTC")
+
+    if not quiet_start or not quiet_end:
+        return False
+
+    now = datetime.now(tz=UTC)
+    return is_quiet_hours(now, quiet_start, quiet_end, timezone)
+
+
 async def notify(
     session: AsyncSession,
     job_record: JobRecord,
@@ -108,6 +141,8 @@ async def notify(
     """Route a notification through the configured channel(s).
 
     Flow:
+    0. Check quiet hours — if active, queue the notification for batch
+       delivery and return immediately.
     1. Check the shared rate limit — if exceeded, log and return.
     2. Determine the primary channel via ``determine_channel()``.
     3. If ntfy: publish to urgent topic. On failure after retries, fall back
@@ -130,6 +165,16 @@ async def notify(
         trigger_reason,
         job_record.fit_score,
     )
+
+    # Step 0: Check quiet hours — queue instead of immediate delivery
+    if await _is_quiet_hours_active(session):
+        await queue_notification(
+            session=session,
+            job_id=job_record.id,
+            trigger_reason=trigger_reason,
+            message_body=body,
+        )
+        return
 
     # Step 1: Check rate limit
     allowed = await check_rate_limit(session)
@@ -366,12 +411,25 @@ async def send_run_summary(
     If ntfy is disabled or the publish fails, the failure is logged but no
     SMS fallback is attempted (info notifications are non-critical).
 
+    During quiet hours, the summary is queued for batch delivery instead of
+    being sent immediately.
+
     Args:
         session: Active async database session.
         summary_text: The plain-English run summary text.
         settings: Unified notification settings.
     """
     trigger_reason = "run_summary"
+
+    # Check quiet hours — queue instead of immediate delivery
+    if await _is_quiet_hours_active(session):
+        await queue_notification(
+            session=session,
+            job_id=None,
+            trigger_reason=trigger_reason,
+            message_body=summary_text,
+        )
+        return
 
     if not settings.ntfy_enabled or settings.ntfy is None:
         logger.info(

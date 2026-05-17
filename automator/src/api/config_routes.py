@@ -2,10 +2,10 @@
 Configuration API endpoints for the LinkedIn Job Automator.
 
 Provides GET/PUT endpoints for managing search config, goals profile,
-user profile, system settings, and ntfy notification configuration.
-All endpoints require Bearer token authentication. The GET /config/settings
-endpoint redacts secret fields. The GET /config/ntfy endpoint omits the
-api_token for security.
+user profile, system settings, ntfy notification configuration, and
+blacklist configuration. All endpoints require Bearer token authentication.
+The GET /config/settings endpoint redacts secret fields. The GET /config/ntfy
+endpoint omits the api_token for security.
 
 Includes a LAN IP auto-detection endpoint that resolves the host machine's
 LAN-routable IP address from within the Docker container.
@@ -14,9 +14,11 @@ LAN-routable IP address from within the Docker container.
 from __future__ import annotations
 
 import re
+from datetime import UTC, datetime
+from typing import Literal
 
 import structlog
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, field_validator
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -39,8 +41,15 @@ from src.api.schemas import (
     UserProfile,
     UserProfileUpdate,
 )
+from src.db.blacklist_repo import add_entry, get_all_entries, remove_entry, get_entries_by_type
 from src.db.config_repo import get_config, set_config
 from src.db.database import get_session
+from src.scheduler.schedule_manager import (
+    ScheduleConfig,
+    apply_schedule,
+    compute_next_run_times,
+    validate_schedule_config,
+)
 
 logger = structlog.get_logger(__name__)
 
@@ -404,4 +413,437 @@ async def put_ntfy_config(
         urgent_topic=urgent_topic,
         info_topic=info_topic,
         lan_base_url=body.lan_base_url,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Schedule Configuration — Pydantic models
+# ---------------------------------------------------------------------------
+
+
+class ScheduleConfigResponse(BaseModel):
+    """Response schema for GET /config/schedule.
+
+    Attributes:
+        mode: Scheduling mode — "specific_times" or "interval".
+        times: List of HH:MM strings (specific_times mode).
+        interval_hours: Hours between runs (interval mode).
+        window_start: HH:MM start of daily window (interval mode).
+        window_end: HH:MM end of daily window (interval mode).
+        weekend_runs: Whether to run on weekends.
+        timezone: IANA timezone string.
+        quiet_hours_start: HH:MM start of quiet hours, or null.
+        quiet_hours_end: HH:MM end of quiet hours, or null.
+    """
+
+    mode: Literal["specific_times", "interval"] = "specific_times"
+    times: list[str] = []
+    interval_hours: int = 2
+    window_start: str = "08:00"
+    window_end: str = "20:00"
+    weekend_runs: bool = False
+    timezone: str = "America/New_York"
+    quiet_hours_start: str | None = None
+    quiet_hours_end: str | None = None
+
+
+class ScheduleConfigUpdate(BaseModel):
+    """Request body for PUT /config/schedule.
+
+    Attributes:
+        mode: Scheduling mode — "specific_times" or "interval".
+        times: List of HH:MM strings (specific_times mode).
+        interval_hours: Hours between runs (interval mode).
+        window_start: HH:MM start of daily window (interval mode).
+        window_end: HH:MM end of daily window (interval mode).
+        weekend_runs: Whether to run on weekends.
+        timezone: IANA timezone string.
+        quiet_hours_start: HH:MM start of quiet hours, or null.
+        quiet_hours_end: HH:MM end of quiet hours, or null.
+    """
+
+    mode: Literal["specific_times", "interval"]
+    times: list[str] = []
+    interval_hours: int = 2
+    window_start: str = "08:00"
+    window_end: str = "20:00"
+    weekend_runs: bool = False
+    timezone: str = "America/New_York"
+    quiet_hours_start: str | None = None
+    quiet_hours_end: str | None = None
+
+
+class ScheduleNextResponse(BaseModel):
+    """Response schema for GET /schedule/next.
+
+    Attributes:
+        next_runs: List of ISO 8601 datetime strings for upcoming run times.
+    """
+
+    next_runs: list[str]
+
+
+# ---------------------------------------------------------------------------
+# Schedule Configuration Endpoints
+# ---------------------------------------------------------------------------
+
+
+@router.get("/schedule", response_model=ScheduleConfigResponse)
+async def get_schedule_config(
+    session: AsyncSession = Depends(get_session),
+) -> ScheduleConfigResponse:
+    """Retrieve the current schedule configuration.
+
+    Returns the stored schedule config or defaults if not yet configured.
+    """
+    logger.info("get_schedule_config")
+    data = await get_config(session, "schedule_config")
+    if data is None:
+        return ScheduleConfigResponse()
+    return ScheduleConfigResponse(**data)
+
+
+@router.put("/schedule", response_model=ScheduleConfigResponse)
+async def put_schedule_config(
+    body: ScheduleConfigUpdate,
+    request: Request,
+    session: AsyncSession = Depends(get_session),
+) -> ScheduleConfigResponse | JSONResponse:
+    """Update the schedule configuration with hot-reload.
+
+    Validates the new schedule config. If valid, persists it to the config
+    store and calls apply_schedule() to update APScheduler triggers without
+    requiring a restart.
+
+    Returns:
+        The saved schedule configuration on success.
+        422 response if the config is invalid (zero times, invalid formats).
+    """
+    logger.info("put_schedule_config", mode=body.mode)
+
+    # Build ScheduleConfig dataclass from request body
+    config = ScheduleConfig(
+        mode=body.mode,
+        times=body.times,
+        interval_hours=body.interval_hours,
+        window_start=body.window_start,
+        window_end=body.window_end,
+        weekend_runs=body.weekend_runs,
+        timezone=body.timezone,
+        quiet_hours_start=body.quiet_hours_start,
+        quiet_hours_end=body.quiet_hours_end,
+    )
+
+    # Validate the config — returns 422 on failure
+    try:
+        validate_schedule_config(config)
+    except ValueError as exc:
+        logger.warning("schedule_config_validation_failed", error=str(exc))
+        return JSONResponse(
+            status_code=422,
+            content={"detail": str(exc)},
+        )
+
+    # Persist to database
+    data = body.model_dump()
+    await set_config(session, "schedule_config", data)
+
+    # Hot-reload: apply the new schedule to APScheduler
+    scheduler = getattr(request.app.state, "scheduler", None)
+    if scheduler is not None:
+        try:
+            apply_schedule(scheduler, config)
+            logger.info("schedule_hot_reload_success")
+        except Exception as exc:
+            logger.error("schedule_hot_reload_failed", error=str(exc))
+    else:
+        logger.warning("schedule_hot_reload_skipped", reason="scheduler not available")
+
+    return ScheduleConfigResponse(**data)
+
+
+# ---------------------------------------------------------------------------
+# Schedule Next Runs — separate router (not under /config prefix)
+# ---------------------------------------------------------------------------
+
+schedule_router = APIRouter(prefix="/schedule", dependencies=[Depends(verify_token)])
+
+
+@schedule_router.get("/next", response_model=ScheduleNextResponse)
+async def get_schedule_next(
+    session: AsyncSession = Depends(get_session),
+) -> ScheduleNextResponse | JSONResponse:
+    """Compute and return the next 3 upcoming scheduled run times.
+
+    Uses the current schedule configuration to compute future run times.
+    Returns 422 if the schedule config is invalid or has zero times.
+    """
+    logger.info("get_schedule_next")
+
+    data = await get_config(session, "schedule_config")
+    if data is None:
+        # No schedule configured — return empty list
+        return ScheduleNextResponse(next_runs=[])
+
+    # Build ScheduleConfig from stored data
+    config = ScheduleConfig(
+        mode=data.get("mode", "specific_times"),
+        times=data.get("times", []),
+        interval_hours=data.get("interval_hours", 2),
+        window_start=data.get("window_start", "08:00"),
+        window_end=data.get("window_end", "20:00"),
+        weekend_runs=data.get("weekend_runs", False),
+        timezone=data.get("timezone", "America/New_York"),
+        quiet_hours_start=data.get("quiet_hours_start"),
+        quiet_hours_end=data.get("quiet_hours_end"),
+    )
+
+    # Validate before computing — return 422 for invalid configs
+    try:
+        validate_schedule_config(config)
+    except ValueError as exc:
+        logger.warning("schedule_next_validation_failed", error=str(exc))
+        return JSONResponse(
+            status_code=422,
+            content={"detail": str(exc)},
+        )
+
+    # Compute next 3 run times from now
+    now = datetime.now(UTC)
+    next_times = compute_next_run_times(config, now, count=3)
+
+    # Format as ISO 8601 strings
+    next_runs = [t.isoformat() for t in next_times]
+
+    return ScheduleNextResponse(next_runs=next_runs)
+
+
+# ---------------------------------------------------------------------------
+# Blacklist Configuration — Pydantic models
+# ---------------------------------------------------------------------------
+
+
+class BlacklistEntryResponse(BaseModel):
+    """A single blacklist entry with its hit count.
+
+    Attributes:
+        value: The blacklist string (company name or title pattern).
+        hit_count: Number of jobs filtered by this entry.
+    """
+
+    value: str
+    hit_count: int
+
+
+class BlacklistConfigResponse(BaseModel):
+    """Response schema for GET /config/blacklist.
+
+    Attributes:
+        companies: List of blacklisted companies with hit counts.
+        title_patterns: List of blacklisted title patterns with hit counts.
+    """
+
+    companies: list[BlacklistEntryResponse]
+    title_patterns: list[BlacklistEntryResponse]
+
+
+class BlacklistConfigUpdate(BaseModel):
+    """Request body for PUT /config/blacklist.
+
+    Replaces both blacklists entirely.
+
+    Attributes:
+        companies: List of company names to blacklist.
+        title_patterns: List of title patterns to blacklist.
+    """
+
+    companies: list[str]
+    title_patterns: list[str]
+
+
+class BlacklistAddEntry(BaseModel):
+    """Request body for POST /config/blacklist/companies or /titles.
+
+    Attributes:
+        value: The blacklist string to add.
+    """
+
+    value: str
+
+
+# ---------------------------------------------------------------------------
+# Blacklist Configuration Endpoints
+# ---------------------------------------------------------------------------
+
+
+@router.get("/blacklist", response_model=BlacklistConfigResponse)
+async def get_blacklist_config(
+    session: AsyncSession = Depends(get_session),
+) -> BlacklistConfigResponse:
+    """Retrieve both company and title pattern blacklists with hit counts.
+
+    Returns all blacklist entries grouped by type, each with its value
+    and the number of jobs it has filtered.
+    """
+    logger.info("get_blacklist_config")
+
+    entries = await get_all_entries(session)
+
+    companies: list[BlacklistEntryResponse] = []
+    title_patterns: list[BlacklistEntryResponse] = []
+
+    for entry in entries:
+        item = BlacklistEntryResponse(value=entry.value, hit_count=entry.hit_count)
+        if entry.entry_type == "company":
+            companies.append(item)
+        elif entry.entry_type == "title_pattern":
+            title_patterns.append(item)
+
+    return BlacklistConfigResponse(companies=companies, title_patterns=title_patterns)
+
+
+@router.put("/blacklist", response_model=BlacklistConfigResponse)
+async def put_blacklist_config(
+    body: BlacklistConfigUpdate,
+    session: AsyncSession = Depends(get_session),
+) -> BlacklistConfigResponse:
+    """Replace both blacklists entirely.
+
+    Clears all existing blacklist entries and replaces them with the
+    provided lists. Hit counts are reset to 0 for all new entries.
+
+    Returns the new blacklist configuration.
+    """
+    logger.info(
+        "put_blacklist_config",
+        company_count=len(body.companies),
+        title_pattern_count=len(body.title_patterns),
+    )
+
+    # Remove all existing entries
+    existing = await get_all_entries(session)
+    for entry in existing:
+        await session.delete(entry)
+    await session.flush()
+
+    # Add new company entries
+    for company in body.companies:
+        await add_entry(session, "company", company)
+
+    # Add new title pattern entries
+    for pattern in body.title_patterns:
+        await add_entry(session, "title_pattern", pattern)
+
+    # Build response
+    companies = [BlacklistEntryResponse(value=c, hit_count=0) for c in body.companies]
+    title_patterns = [BlacklistEntryResponse(value=p, hit_count=0) for p in body.title_patterns]
+
+    return BlacklistConfigResponse(companies=companies, title_patterns=title_patterns)
+
+
+@router.post("/blacklist/companies", response_model=BlacklistEntryResponse, status_code=201)
+async def add_blacklist_company(
+    body: BlacklistAddEntry,
+    session: AsyncSession = Depends(get_session),
+) -> BlacklistEntryResponse | JSONResponse:
+    """Add a company to the blacklist.
+
+    Creates a new company blacklist entry with hit_count of 0.
+    Returns 409 if the entry already exists.
+    """
+    logger.info("add_blacklist_company", value=body.value)
+
+    # Check if entry already exists
+    existing = await get_entries_by_type(session, "company")
+    for entry in existing:
+        if entry.value.lower() == body.value.lower():
+            return JSONResponse(
+                status_code=409,
+                content={"detail": f"Company '{body.value}' is already blacklisted"},
+            )
+
+    entry = await add_entry(session, "company", body.value)
+    return BlacklistEntryResponse(value=entry.value, hit_count=entry.hit_count)
+
+
+@router.delete("/blacklist/companies/{entry}")
+async def remove_blacklist_company(
+    entry: str,
+    session: AsyncSession = Depends(get_session),
+) -> JSONResponse:
+    """Remove a company from the blacklist.
+
+    Args:
+        entry: The company name to remove (URL-encoded if needed).
+
+    Returns:
+        200 with success message if removed.
+        404 if the entry was not found.
+    """
+    logger.info("remove_blacklist_company", value=entry)
+
+    removed = await remove_entry(session, "company", entry)
+    if not removed:
+        return JSONResponse(
+            status_code=404,
+            content={"detail": f"Company '{entry}' not found in blacklist"},
+        )
+
+    return JSONResponse(
+        status_code=200,
+        content={"detail": f"Company '{entry}' removed from blacklist"},
+    )
+
+
+@router.post("/blacklist/titles", response_model=BlacklistEntryResponse, status_code=201)
+async def add_blacklist_title(
+    body: BlacklistAddEntry,
+    session: AsyncSession = Depends(get_session),
+) -> BlacklistEntryResponse | JSONResponse:
+    """Add a title pattern to the blacklist.
+
+    Creates a new title pattern blacklist entry with hit_count of 0.
+    Returns 409 if the entry already exists.
+    """
+    logger.info("add_blacklist_title", value=body.value)
+
+    # Check if entry already exists
+    existing = await get_entries_by_type(session, "title_pattern")
+    for entry in existing:
+        if entry.value.lower() == body.value.lower():
+            return JSONResponse(
+                status_code=409,
+                content={"detail": f"Title pattern '{body.value}' is already blacklisted"},
+            )
+
+    entry = await add_entry(session, "title_pattern", body.value)
+    return BlacklistEntryResponse(value=entry.value, hit_count=entry.hit_count)
+
+
+@router.delete("/blacklist/titles/{entry}")
+async def remove_blacklist_title(
+    entry: str,
+    session: AsyncSession = Depends(get_session),
+) -> JSONResponse:
+    """Remove a title pattern from the blacklist.
+
+    Args:
+        entry: The title pattern to remove (URL-encoded if needed).
+
+    Returns:
+        200 with success message if removed.
+        404 if the entry was not found.
+    """
+    logger.info("remove_blacklist_title", value=entry)
+
+    removed = await remove_entry(session, "title_pattern", entry)
+    if not removed:
+        return JSONResponse(
+            status_code=404,
+            content={"detail": f"Title pattern '{entry}' not found in blacklist"},
+        )
+
+    return JSONResponse(
+        status_code=200,
+        content={"detail": f"Title pattern '{entry}' removed from blacklist"},
     )

@@ -13,7 +13,18 @@ from sqlalchemy.orm import sessionmaker
 from src.db.config_repo import set_config
 from src.db.models import Base, JobRecord, StatusTransition
 from src.integrations.linkedin_scraper import DiscoveredJob
+from src.pipeline.health_checker import HealthCheckResult
 from src.pipeline.job_pipeline import _build_sms_settings, _get_jobs_by_status, run_pipeline
+
+
+def _healthy_check_result() -> HealthCheckResult:
+    """Return a healthy HealthCheckResult for mocking."""
+    return HealthCheckResult(
+        chrome_reachable=True,
+        linkedin_authenticated=True,
+        error_message=None,
+        checked_at="2024-01-15T09:00:00+00:00",
+    )
 
 
 @pytest_asyncio.fixture
@@ -92,6 +103,11 @@ async def test_pipeline_runs_discovery_and_creates_records(async_session: AsyncS
 
     with (
         patch("src.pipeline.job_pipeline.async_playwright") as mock_async_pw,
+        patch(
+            "src.pipeline.job_pipeline.check_session_health",
+            new_callable=AsyncMock,
+            return_value=_healthy_check_result(),
+        ),
         patch(
             "src.pipeline.job_pipeline.discover_and_extract_jobs",
             new_callable=AsyncMock,
@@ -281,6 +297,11 @@ async def test_pipeline_idempotent_on_terminal_state_jobs(async_session: AsyncSe
     with (
         patch("src.pipeline.job_pipeline.async_playwright") as mock_async_pw,
         patch(
+            "src.pipeline.job_pipeline.check_session_health",
+            new_callable=AsyncMock,
+            return_value=_healthy_check_result(),
+        ),
+        patch(
             "src.pipeline.job_pipeline.discover_and_extract_jobs",
             new_callable=AsyncMock,
             return_value=[],  # No new jobs discovered
@@ -404,6 +425,11 @@ async def test_pipeline_calls_all_stages_in_order(async_session: AsyncSession):
     with (
         patch("src.pipeline.job_pipeline.async_playwright") as mock_async_pw,
         patch(
+            "src.pipeline.job_pipeline.check_session_health",
+            new_callable=AsyncMock,
+            return_value=_healthy_check_result(),
+        ),
+        patch(
             "src.pipeline.job_pipeline.discover_and_extract_jobs",
             side_effect=mock_discover,
         ),
@@ -429,3 +455,168 @@ async def test_pipeline_calls_all_stages_in_order(async_session: AsyncSession):
     assert call_order.index("scoring") < call_order.index("tailoring")
     assert call_order.index("tailoring") < call_order.index("easy_apply")
     assert call_order.index("easy_apply") < call_order.index("restore_resume")
+
+
+@pytest.mark.asyncio
+async def test_pipeline_blacklist_skips_matched_jobs(async_session: AsyncSession):
+    """Pipeline skips jobs that match blacklist entries and increments hit_count.
+
+    Validates: Requirements 4.3, 4.4, 4.5, 4.11
+    """
+    from src.db.models import BlacklistEntry
+
+    # Set up required config
+    await set_config(async_session, "system_state", {"status": "idle", "last_run_at": None})
+    await set_config(
+        async_session,
+        "goals_profile",
+        {
+            "target_titles": ["Engineer"],
+            "deal_breakers": [],
+            "open_to_stretch": True,
+            "min_salary": 0,
+        },
+    )
+    await set_config(async_session, "search_config", {"keywords": "python"})
+    await set_config(async_session, "user_profile", {"full_name": "Test User"})
+    await set_config(
+        async_session,
+        "settings",
+        {"claude_api_key": "sk-test", "good_fit_threshold": 75, "stretch_threshold": 50},
+    )
+    await async_session.commit()
+
+    # Add blacklist entries
+    bl_company = BlacklistEntry(
+        entry_type="company",
+        value="Revature",
+        created_at="2024-01-01T00:00:00+00:00",
+        hit_count=0,
+    )
+    bl_title = BlacklistEntry(
+        entry_type="title_pattern",
+        value="intern",
+        created_at="2024-01-01T00:00:00+00:00",
+        hit_count=0,
+    )
+    async_session.add(bl_company)
+    async_session.add(bl_title)
+    await async_session.flush()
+
+    mock_page = AsyncMock()
+    mock_context = AsyncMock()
+    mock_context.new_page = AsyncMock(return_value=mock_page)
+
+    mock_browser = AsyncMock()
+    mock_browser.contexts = [mock_context]
+
+    mock_pw = AsyncMock()
+    mock_pw.chromium.connect_over_cdp = AsyncMock(return_value=mock_browser)
+
+    mock_scoring = AsyncMock()
+
+    with (
+        patch("src.pipeline.job_pipeline.async_playwright") as mock_async_pw,
+        patch(
+            "src.pipeline.job_pipeline.check_session_health",
+            new_callable=AsyncMock,
+            return_value=_healthy_check_result(),
+        ),
+        patch(
+            "src.pipeline.job_pipeline.discover_and_extract_jobs",
+            new_callable=AsyncMock,
+            return_value=[
+                DiscoveredJob(
+                    job_id="bl_1",
+                    title="Software Engineer",
+                    company="Revature",
+                    description="A job at Revature.",
+                    linkedin_url="https://www.linkedin.com/jobs/view/bl_1",
+                ),
+                DiscoveredJob(
+                    job_id="bl_2",
+                    title="Software Engineering Intern",
+                    company="Good Corp",
+                    description="An internship position.",
+                    linkedin_url="https://www.linkedin.com/jobs/view/bl_2",
+                ),
+                DiscoveredJob(
+                    job_id="bl_3",
+                    title="Senior Engineer",
+                    company="Great Inc",
+                    description="A great senior role.",
+                    linkedin_url="https://www.linkedin.com/jobs/view/bl_3",
+                ),
+            ],
+        ),
+        patch(
+            "src.pipeline.job_pipeline.run_scoring",
+            mock_scoring,
+        ),
+    ):
+        mock_async_pw.return_value.start = AsyncMock(return_value=mock_pw)
+
+        await run_pipeline(async_session)
+
+    # Verify blacklisted jobs were skipped
+    result = await async_session.execute(
+        select(JobRecord).where(JobRecord.id == "bl_1")
+    )
+    job1 = result.scalar_one()
+    assert job1.status == "skipped"
+
+    # Check the status transition reason
+    result = await async_session.execute(
+        select(StatusTransition).where(
+            StatusTransition.job_id == "bl_1",
+            StatusTransition.to_status == "skipped",
+        )
+    )
+    transition1 = result.scalar_one()
+    assert "blacklisted" in (transition1.reason or "")
+    assert "company:Revature" in (transition1.reason or "")
+
+    result = await async_session.execute(
+        select(JobRecord).where(JobRecord.id == "bl_2")
+    )
+    job2 = result.scalar_one()
+    assert job2.status == "skipped"
+
+    result = await async_session.execute(
+        select(StatusTransition).where(
+            StatusTransition.job_id == "bl_2",
+            StatusTransition.to_status == "skipped",
+        )
+    )
+    transition2 = result.scalar_one()
+    assert "blacklisted" in (transition2.reason or "")
+    assert "title:intern" in (transition2.reason or "")
+
+    # Verify non-blacklisted job was NOT skipped (should be in extracted status)
+    result = await async_session.execute(
+        select(JobRecord).where(JobRecord.id == "bl_3")
+    )
+    job3 = result.scalar_one()
+    assert job3.status != "skipped"
+
+    # Verify hit_count was incremented
+    await async_session.refresh(bl_company)
+    await async_session.refresh(bl_title)
+    assert bl_company.hit_count == 1
+    assert bl_title.hit_count == 1
+
+    # Verify scoring was only called for the non-blacklisted job
+    # (scoring is called for each extracted job that passes pre-filters)
+    scored_job_ids = [call.kwargs.get("job_record", call.args[0] if call.args else None)
+                      for call in mock_scoring.call_args_list]
+    # The non-blacklisted job should have been passed to scoring
+    assert any(
+        getattr(j, "id", None) == "bl_3" for j in scored_job_ids
+    ), "Non-blacklisted job should have been scored"
+    # Blacklisted jobs should NOT have been passed to scoring
+    assert not any(
+        getattr(j, "id", None) == "bl_1" for j in scored_job_ids
+    ), "Blacklisted job bl_1 should not have been scored"
+    assert not any(
+        getattr(j, "id", None) == "bl_2" for j in scored_job_ids
+    ), "Blacklisted job bl_2 should not have been scored"
