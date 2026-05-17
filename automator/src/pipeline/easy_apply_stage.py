@@ -20,10 +20,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.agents.claude_client import ClaudeClient
 from src.api.schemas import UserProfile
 from src.db.job_repo import update_job_status
-from src.db.models import JobRecord, NotificationLog
+from src.db.models import JobRecord
 from src.exceptions import ApplyError
-from src.integrations.sms_gateway import SMSSettings, compose_sms, send_sms
-from src.integrations.sms_rate_limiter import check_rate_limit
+from src.pipeline.notification_service import NotificationSettings, notify
 
 logger = structlog.get_logger(__name__)
 
@@ -59,7 +58,7 @@ async def run_easy_apply(
     session: AsyncSession,
     page: Page,
     claude_client: ClaudeClient,
-    sms_settings: SMSSettings | None = None,
+    notification_settings: NotificationSettings | None = None,
     goals_profile: str | None = None,
 ) -> None:
     """Execute the Easy Apply flow for a single job record.
@@ -68,9 +67,9 @@ async def run_easy_apply(
     from the user profile, attaches the tailored resume PDF, generates a cover
     letter if required, and submits the application.
 
-    On unanswered questions: sets queue_reason, sends SMS, and returns without
-    submitting. On submission failure: retries once, then marks as apply_failed
-    with SMS notification.
+    On unanswered questions: sets queue_reason, sends notification, and returns
+    without submitting. On submission failure: retries once, then marks as
+    apply_failed with notification.
 
     Args:
         job_record: The job record to apply to. Must have status "approved_for_apply"
@@ -79,7 +78,8 @@ async def run_easy_apply(
         session: Active async database session for persisting state changes.
         page: A Playwright Page instance (already authenticated with LinkedIn).
         claude_client: Claude API client for cover letter generation.
-        sms_settings: SMS gateway settings for notifications. If None, SMS is skipped.
+        notification_settings: Unified notification settings. If None, notifications
+            are skipped.
         goals_profile: Goals profile as JSON string for cover letter generation context.
     """
     job_id = job_record.id
@@ -100,7 +100,7 @@ async def run_easy_apply(
             session=session,
             page=page,
             claude_client=claude_client,
-            sms_settings=sms_settings,
+            notification_settings=notification_settings,
             goals_profile=goals_profile,
         )
     except ApplyError as exc:
@@ -117,7 +117,7 @@ async def run_easy_apply(
                 session=session,
                 page=page,
                 claude_client=claude_client,
-                sms_settings=sms_settings,
+                notification_settings=notification_settings,
                 goals_profile=goals_profile,
             )
         except ApplyError as retry_exc:
@@ -139,7 +139,7 @@ async def run_easy_apply(
                 session=session,
                 job_record=job_record,
                 trigger_reason=f"apply_failed: {retry_exc.message}",
-                sms_settings=sms_settings,
+                notification_settings=notification_settings,
             )
             return
 
@@ -150,7 +150,7 @@ async def _execute_easy_apply(
     session: AsyncSession,
     page: Page,
     claude_client: ClaudeClient,
-    sms_settings: SMSSettings | None,
+    notification_settings: NotificationSettings | None,
     goals_profile: str | None,
 ) -> None:
     """Internal implementation of the Easy Apply flow.
@@ -164,7 +164,7 @@ async def _execute_easy_apply(
         session: Active async database session.
         page: Playwright Page instance.
         claude_client: Claude API client.
-        sms_settings: SMS settings for notifications.
+        notification_settings: Unified notification settings for alerts.
         goals_profile: Goals profile JSON string.
 
     Raises:
@@ -229,7 +229,7 @@ async def _execute_easy_apply(
                 session=session,
                 job_record=job_record,
                 trigger_reason=f"unanswered_question: {question_text[:80]}",
-                sms_settings=sms_settings,
+                notification_settings=notification_settings,
             )
             # Dismiss the modal
             await _dismiss_modal(page)
@@ -644,86 +644,31 @@ async def _send_notification(
     session: AsyncSession,
     job_record: JobRecord,
     trigger_reason: str,
-    sms_settings: SMSSettings | None,
+    notification_settings: NotificationSettings | None,
 ) -> None:
-    """Send an SMS notification and log it to the notification_log table.
+    """Send a notification via the centralized notification service.
 
-    Checks the rate limit before sending. Logs the notification attempt
-    regardless of success or failure.
+    Delegates to the refactored notify() function which handles channel routing
+    (ntfy primary, SMS fallback), rate limiting, and logging.
 
     Args:
         session: Active async database session.
         job_record: The job record triggering the notification.
         trigger_reason: The reason for the notification.
-        sms_settings: SMS gateway settings. If None, notification is logged but not sent.
+        notification_settings: Unified notification settings. If None, notification
+            is skipped.
     """
-    sms_body = compose_sms(
-        job_record.job_title, job_record.company, trigger_reason, job_record.fit_score
-    )
-    now_iso = datetime.now(UTC).isoformat()
-
-    if sms_settings is None:
+    if notification_settings is None:
         logger.warning(
-            "sms_settings_not_configured",
+            "notification_settings_not_configured",
             job_id=job_record.id,
             trigger_reason=trigger_reason,
         )
-        log_entry = NotificationLog(
-            job_id=job_record.id,
-            trigger_reason=trigger_reason,
-            sms_body=sms_body,
-            sent_at=now_iso,
-            success=0,
-            error_message="SMS settings not configured",
-        )
-        session.add(log_entry)
-        await session.flush()
         return
 
-    # Check rate limit
-    allowed = await check_rate_limit(session)
-    if not allowed:
-        logger.warning(
-            "sms_rate_limited",
-            job_id=job_record.id,
-            trigger_reason=trigger_reason,
-        )
-        log_entry = NotificationLog(
-            job_id=job_record.id,
-            trigger_reason=trigger_reason,
-            sms_body=sms_body,
-            sent_at=now_iso,
-            success=0,
-            error_message="Rate limit exceeded",
-        )
-        session.add(log_entry)
-        await session.flush()
-        return
-
-    # Send SMS
-    result = send_sms(sms_body, sms_settings)
-
-    log_entry = NotificationLog(
-        job_id=job_record.id,
+    await notify(
+        session=session,
+        job_record=job_record,
         trigger_reason=trigger_reason,
-        sms_body=sms_body,
-        sent_at=now_iso,
-        success=1 if result.ok else 0,
-        error_message=result.error,
+        settings=notification_settings,
     )
-    session.add(log_entry)
-    await session.flush()
-
-    if result.ok:
-        logger.info(
-            "sms_notification_sent",
-            job_id=job_record.id,
-            trigger_reason=trigger_reason,
-        )
-    else:
-        logger.error(
-            "sms_notification_failed",
-            job_id=job_record.id,
-            trigger_reason=trigger_reason,
-            error=result.error,
-        )

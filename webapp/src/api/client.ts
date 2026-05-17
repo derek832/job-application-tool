@@ -7,6 +7,14 @@
  */
 
 import { z } from "zod";
+import {
+  NtfyConfigResponse,
+  NtfyConfigResponseSchema,
+  NtfyConfigUpdate,
+} from "../types/ntfy";
+
+export type { NtfyConfigResponse, NtfyConfigUpdate };
+export { NtfyConfigResponseSchema };
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -323,6 +331,21 @@ export async function updateSettings(data: Partial<Settings>): Promise<Settings>
 }
 
 // ---------------------------------------------------------------------------
+// Ntfy Configuration
+// ---------------------------------------------------------------------------
+
+export async function getNtfyConfig(): Promise<NtfyConfigResponse> {
+  return request("/config/ntfy", NtfyConfigResponseSchema);
+}
+
+export async function updateNtfyConfig(data: NtfyConfigUpdate): Promise<NtfyConfigResponse> {
+  return request("/config/ntfy", NtfyConfigResponseSchema, {
+    method: "PUT",
+    body: JSON.stringify(data),
+  });
+}
+
+// ---------------------------------------------------------------------------
 // Job Records
 // ---------------------------------------------------------------------------
 
@@ -385,6 +408,31 @@ export async function rejectQueueItem(id: string): Promise<void> {
 
 export async function markManuallyApplied(id: string): Promise<void> {
   return requestVoid(`/queue/${encodeURIComponent(id)}/manual`, { method: "POST" });
+}
+
+// ---------------------------------------------------------------------------
+// Run History
+// ---------------------------------------------------------------------------
+
+export const RunHistoryItemSchema = z.object({
+  id: z.string(),
+  created_at: z.string(),
+  summary: z.string(),
+});
+
+export const RunHistoryResponseSchema = z.object({
+  items: z.array(RunHistoryItemSchema),
+});
+
+export type RunHistoryItem = z.infer<typeof RunHistoryItemSchema>;
+export type RunHistoryResponse = z.infer<typeof RunHistoryResponseSchema>;
+
+export async function getRunHistory(limit: number = 5): Promise<RunHistoryItem[]> {
+  const result = await request(
+    `/runs/history?limit=${limit}`,
+    RunHistoryResponseSchema
+  );
+  return result.items;
 }
 
 // ---------------------------------------------------------------------------

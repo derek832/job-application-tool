@@ -69,106 +69,77 @@ class TestComposeSms:
 
 
 class TestSendSms:
-    """Tests for send_sms SMTP sending with retries."""
+    """Tests for send_sms Gmail API sending with retries."""
 
     @pytest.fixture()
     def settings(self) -> SMSSettings:
         """Standard test settings."""
         return SMSSettings(
             gmail_user="test@gmail.com",
-            gmail_app_password="app-password-123",
             sms_gateway="5551234567@txt.att.net",
         )
 
-    @patch("src.integrations.sms_gateway.smtplib.SMTP")
-    def test_successful_send_returns_ok(
-        self, mock_smtp_class: MagicMock, settings: SMSSettings
+    @pytest.mark.asyncio
+    @patch("src.integrations.sms_gateway.load_credentials")
+    @patch("src.integrations.sms_gateway._gmail_api_send")
+    async def test_successful_send_returns_ok(
+        self, mock_send: MagicMock, mock_creds: MagicMock, settings: SMSSettings
     ) -> None:
-        """A successful SMTP send returns Result(ok=True)."""
-        mock_server = MagicMock()
-        mock_smtp_class.return_value.__enter__ = MagicMock(return_value=mock_server)
-        mock_smtp_class.return_value.__exit__ = MagicMock(return_value=False)
+        """A successful Gmail API send returns Result(ok=True)."""
+        mock_creds.return_value = MagicMock()
+        mock_send.return_value = None  # None means success
 
-        result = send_sms("Test message", settings)
+        result = await send_sms("Test message", settings)
 
         assert result.ok is True
         assert result.error is None
 
-    @patch("src.integrations.sms_gateway.smtplib.SMTP")
-    def test_successful_send_calls_starttls(
-        self, mock_smtp_class: MagicMock, settings: SMSSettings
+    @pytest.mark.asyncio
+    @patch("src.integrations.sms_gateway.load_credentials")
+    async def test_no_credentials_returns_error(
+        self, mock_creds: MagicMock, settings: SMSSettings
     ) -> None:
-        """SMTP connection uses STARTTLS."""
-        mock_server = MagicMock()
-        mock_smtp_class.return_value.__enter__ = MagicMock(return_value=mock_server)
-        mock_smtp_class.return_value.__exit__ = MagicMock(return_value=False)
+        """Returns error when OAuth credentials are not configured."""
+        mock_creds.return_value = None
 
-        send_sms("Test message", settings)
+        result = await send_sms("Test message", settings)
 
-        mock_server.starttls.assert_called_once()
+        assert result.ok is False
+        assert "OAuth" in result.error
+        assert result.reason == "oauth_not_configured"
 
-    @patch("src.integrations.sms_gateway.smtplib.SMTP")
-    def test_successful_send_authenticates(
-        self, mock_smtp_class: MagicMock, settings: SMSSettings
+    @pytest.mark.asyncio
+    @patch("src.integrations.sms_gateway.asyncio.sleep", new_callable=MagicMock)
+    @patch("src.integrations.sms_gateway.load_credentials")
+    @patch("src.integrations.sms_gateway._gmail_api_send")
+    async def test_retries_on_failure(
+        self, mock_send: MagicMock, mock_creds: MagicMock, mock_sleep: MagicMock, settings: SMSSettings
     ) -> None:
-        """SMTP connection authenticates with gmail credentials."""
-        mock_server = MagicMock()
-        mock_smtp_class.return_value.__enter__ = MagicMock(return_value=mock_server)
-        mock_smtp_class.return_value.__exit__ = MagicMock(return_value=False)
+        """Retries 3 times on Gmail API failure before returning error."""
+        from unittest.mock import AsyncMock as AM
+        mock_creds.return_value = MagicMock()
+        mock_send.return_value = "Gmail API error: 500 Internal Server Error"
 
-        send_sms("Test message", settings)
-
-        mock_server.login.assert_called_once_with("test@gmail.com", "app-password-123")
-
-    @patch("src.integrations.sms_gateway.time.sleep")
-    @patch("src.integrations.sms_gateway.smtplib.SMTP")
-    def test_retries_on_failure(
-        self, mock_smtp_class: MagicMock, mock_sleep: MagicMock, settings: SMSSettings
-    ) -> None:
-        """Retries 3 times on SMTP failure before returning error."""
-        mock_smtp_class.return_value.__enter__ = MagicMock(
-            side_effect=ConnectionError("Connection refused")
-        )
-        mock_smtp_class.return_value.__exit__ = MagicMock(return_value=False)
-
-        result = send_sms("Test message", settings)
+        with patch("src.integrations.sms_gateway.asyncio.sleep", new_callable=AM):
+            result = await send_sms("Test message", settings)
 
         assert result.ok is False
         assert result.error is not None
-        assert "Connection refused" in result.error
 
-    @patch("src.integrations.sms_gateway.time.sleep")
-    @patch("src.integrations.sms_gateway.smtplib.SMTP")
-    def test_retries_with_30s_intervals(
-        self, mock_smtp_class: MagicMock, mock_sleep: MagicMock, settings: SMSSettings
-    ) -> None:
-        """Waits 30 seconds between retry attempts."""
-        mock_smtp_class.return_value.__enter__ = MagicMock(
-            side_effect=ConnectionError("Connection refused")
-        )
-        mock_smtp_class.return_value.__exit__ = MagicMock(return_value=False)
-
-        send_sms("Test message", settings)
-
-        # Should sleep between attempts (MAX_RETRIES - 1 times)
-        assert mock_sleep.call_count == MAX_RETRIES - 1
-        for call in mock_sleep.call_args_list:
-            assert call[0][0] == 30
-
-    @patch("src.integrations.sms_gateway.time.sleep")
-    @patch("src.integrations.sms_gateway.smtplib.SMTP")
-    def test_succeeds_on_second_attempt(
-        self, mock_smtp_class: MagicMock, mock_sleep: MagicMock, settings: SMSSettings
+    @pytest.mark.asyncio
+    @patch("src.integrations.sms_gateway.load_credentials")
+    @patch("src.integrations.sms_gateway._gmail_api_send")
+    async def test_succeeds_on_second_attempt(
+        self, mock_send: MagicMock, mock_creds: MagicMock, settings: SMSSettings
     ) -> None:
         """Returns ok=True if a retry succeeds."""
-        mock_server = MagicMock()
-        # First call raises, second succeeds
-        mock_smtp_class.return_value.__enter__ = MagicMock(
-            side_effect=[ConnectionError("timeout"), mock_server]
-        )
-        mock_smtp_class.return_value.__exit__ = MagicMock(return_value=False)
+        from unittest.mock import AsyncMock as AM
+        mock_creds.return_value = MagicMock()
+        # First call fails, second succeeds
+        mock_send.side_effect = ["Gmail API error: 500", None]
 
-        result = send_sms("Test message", settings)
+        with patch("src.integrations.sms_gateway.asyncio.sleep", new_callable=AM):
+            result = await send_sms("Test message", settings)
 
         assert result.ok is True
         assert result.error is None

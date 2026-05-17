@@ -93,16 +93,14 @@ class TestSettings:
         settings = Settings(
             claude_api_key="sk-ant-real-key-12345",
             gmail_user="user@gmail.com",
-            gmail_app_password="super-secret-password",
             sms_gateway="5551234567@txt.att.net",
             good_fit_threshold=80,
             stretch_threshold=55,
         )
         data = settings.model_dump()
         assert data["claude_api_key"] == "***"
-        assert data["gmail_user"] == "***"
-        assert data["gmail_app_password"] == "***"
         # Non-secret fields are NOT redacted
+        assert data["gmail_user"] == "user@gmail.com"
         assert data["sms_gateway"] == "5551234567@txt.att.net"
         assert data["good_fit_threshold"] == 80
         assert data["stretch_threshold"] == 55
@@ -111,7 +109,6 @@ class TestSettings:
         settings = Settings(
             claude_api_key="sk-ant-real-key",
             gmail_user="user@gmail.com",
-            gmail_app_password="password123",
         )
         json_str = settings.model_dump_json()
         assert '"claude_api_key":"***"' in json_str
@@ -121,8 +118,6 @@ class TestSettings:
         settings = Settings()
         data = settings.model_dump()
         assert data["claude_api_key"] == "***"
-        assert data["gmail_user"] == "***"
-        assert data["gmail_app_password"] == "***"
 
     def test_defaults(self) -> None:
         settings = Settings()

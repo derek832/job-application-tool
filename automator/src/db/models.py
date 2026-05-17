@@ -14,6 +14,7 @@ from sqlalchemy import (
     Integer,
     Text,
     UniqueConstraint,
+    desc,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
@@ -175,8 +176,7 @@ class StatusTransition(Base):
 
     def __repr__(self) -> str:
         return (
-            f"<StatusTransition job_id={self.job_id!r} "
-            f"{self.from_status!r} → {self.to_status!r}>"
+            f"<StatusTransition job_id={self.job_id!r} {self.from_status!r} → {self.to_status!r}>"
         )
 
 
@@ -186,7 +186,7 @@ class StatusTransition(Base):
 
 
 class NotificationLog(Base):
-    """Record of every SMS notification attempt made by the Automator.
+    """Record of every notification attempt made by the Automator.
 
     Maps to the ``notification_log`` table.  A row is written for every
     notification attempt — including failures — so the rate limiter can query
@@ -200,12 +200,17 @@ class NotificationLog(Base):
             this notification (e.g. ``"stretch_role"``, ``"captcha_detected"``).
         sms_body: The exact text that was (or was attempted to be) sent.
         sent_at: ISO 8601 timestamp of the send attempt.
-        success: ``1`` if the SMS was delivered successfully, ``0`` otherwise.
-        error_message: SMTP or gateway error detail when ``success`` is ``0``.
+        success: ``1`` if the notification was delivered successfully, ``0`` otherwise.
+        error_message: Error detail when ``success`` is ``0``.
+        channel: Delivery channel used for this attempt. Valid values:
+            ``'ntfy'``, ``'sms'``, ``'sms_fallback'``, ``'none'``.
         job: Back-reference to the parent ``JobRecord`` (nullable).
     """
 
     __tablename__ = "notification_log"
+
+    # Valid channel values for notification delivery
+    VALID_CHANNELS: frozenset[str] = frozenset({"ntfy", "sms", "sms_fallback", "none"})
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     job_id: Mapped[str | None] = mapped_column(
@@ -216,6 +221,7 @@ class NotificationLog(Base):
     sent_at: Mapped[str] = mapped_column(Text, nullable=False)
     success: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    channel: Mapped[str] = mapped_column(Text, nullable=False, default="sms")
 
     # Relationship
     job: Mapped[JobRecord | None] = relationship("JobRecord", back_populates="notification_logs")
@@ -223,7 +229,56 @@ class NotificationLog(Base):
     def __repr__(self) -> str:
         return (
             f"<NotificationLog id={self.id} job_id={self.job_id!r} "
-            f"trigger={self.trigger_reason!r} success={self.success}>"
+            f"trigger={self.trigger_reason!r} channel={self.channel!r} success={self.success}>"
+        )
+
+
+# ---------------------------------------------------------------------------
+# RunSummary
+# ---------------------------------------------------------------------------
+
+
+class RunSummary(Base):
+    """Post-run summary record storing pipeline execution results.
+
+    Maps to the ``run_summaries`` table.  One row is created per completed
+    pipeline run.  A retention policy keeps at most 20 records; older entries
+    are deleted after each new insert.
+
+    Attributes:
+        id: UUID4 string primary key.
+        summary: Plain-English summary paragraph (max 500 characters).
+        jobs_discovered: Number of jobs found during the run.
+        jobs_scored: Number of jobs that were scored.
+        jobs_approved: Number of jobs approved for application.
+        jobs_applied: Number of jobs successfully applied to.
+        jobs_skipped: Number of jobs skipped.
+        jobs_escalated: Number of jobs escalated to the Human Queue.
+        errors: JSON array of error strings (nullable).
+        created_at: ISO 8601 timestamp when the summary was created.
+    """
+
+    __tablename__ = "run_summaries"
+
+    id: Mapped[str] = mapped_column(Text, primary_key=True)
+    summary: Mapped[str] = mapped_column(Text, nullable=False)
+    jobs_discovered: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    jobs_scored: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    jobs_approved: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    jobs_applied: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    jobs_skipped: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    jobs_escalated: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    errors: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[str] = mapped_column(Text, nullable=False)
+
+    __table_args__ = (
+        Index("idx_run_summaries_created_at", desc("created_at")),
+    )
+
+    def __repr__(self) -> str:
+        return (
+            f"<RunSummary id={self.id!r} created_at={self.created_at!r} "
+            f"discovered={self.jobs_discovered} applied={self.jobs_applied}>"
         )
 
 
@@ -300,3 +355,49 @@ class ATSAccount(Base):
 
     def __repr__(self) -> str:
         return f"<ATSAccount domain={self.domain!r} email={self.email!r}>"
+
+
+# ---------------------------------------------------------------------------
+# External Apply Log (Vision tracking)
+# ---------------------------------------------------------------------------
+
+
+class ExternalApplyLog(Base):
+    """Tracks each external apply attempt and which method was used.
+
+    Used to measure how often DOM-based extraction succeeds vs. when the
+    Claude Vision fallback is needed, informing cost/architecture decisions.
+
+    Attributes:
+        id: Auto-incrementing primary key.
+        job_id: Foreign key referencing ``job_records.id``.
+        domain: The ATS domain (e.g. 'greenhouse.io').
+        method: Which extraction method was used: 'dom', 'vision', or 'none'.
+        dom_fields_found: Number of fields extracted from the DOM.
+        vision_fields_found: Number of fields identified by Claude Vision (0 if not used).
+        fields_filled: Number of fields successfully filled.
+        outcome: Result of the attempt: 'submitted', 'dry_run', 'escalated', 'failed'.
+        failure_reason: Machine-readable reason if outcome is 'escalated' or 'failed'.
+        timestamp: ISO 8601 timestamp of the attempt.
+    """
+
+    __tablename__ = "external_apply_log"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    job_id: Mapped[str] = mapped_column(
+        Text, ForeignKey("job_records.id", ondelete="CASCADE"), nullable=False
+    )
+    domain: Mapped[str] = mapped_column(Text, nullable=False)
+    method: Mapped[str] = mapped_column(Text, nullable=False)  # 'dom', 'vision', 'none'
+    dom_fields_found: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    vision_fields_found: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    fields_filled: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    outcome: Mapped[str] = mapped_column(Text, nullable=False)
+    # outcome values: 'submitted', 'dry_run', 'escalated', 'failed'
+    failure_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    timestamp: Mapped[str] = mapped_column(Text, nullable=False)
+
+    __table_args__ = (
+        Index("idx_external_apply_log_job_id", "job_id"),
+        Index("idx_external_apply_log_method", "method"),
+    )

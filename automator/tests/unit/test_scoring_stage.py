@@ -1,7 +1,7 @@
 """Unit tests for the scoring pipeline stage.
 
 Tests cover the full routing logic: good fit, stretch role, skip, deal-breaker
-override, and threshold boundary detection with SMS notifications.
+override, and threshold boundary detection with notifications.
 """
 
 from __future__ import annotations
@@ -16,7 +16,9 @@ from sqlalchemy.orm import sessionmaker
 
 from src.agents.claude_client import FitScoreResult
 from src.db.models import Base, JobRecord, NotificationLog
+from src.integrations.ntfy_client import NtfySettings
 from src.integrations.sms_gateway import SMSSettings
+from src.pipeline.notification_service import NotificationSettings
 from src.pipeline.scoring_stage import run_scoring
 
 
@@ -54,8 +56,20 @@ def _make_sms_settings() -> SMSSettings:
     """Create test SMS settings."""
     return SMSSettings(
         gmail_user="test@gmail.com",
-        gmail_app_password="app-password",
         sms_gateway="5551234567@txt.att.net",
+    )
+
+
+def _make_notification_settings() -> NotificationSettings:
+    """Create test NotificationSettings with SMS enabled."""
+    return NotificationSettings(
+        ntfy_enabled=False,
+        ntfy=None,
+        sms_enabled=True,
+        sms=SMSSettings(
+            gmail_user="test@gmail.com",
+            sms_gateway="5551234567@txt.att.net",
+        ),
     )
 
 
@@ -107,8 +121,7 @@ async def test_stretch_role_routes_to_human_queue(async_session: AsyncSession) -
         deal_breaker_term=None,
     )
 
-    with patch("src.pipeline.scoring_stage.send_sms") as mock_send:
-        mock_send.return_value = MagicMock(ok=True, error=None)
+    with patch("src.pipeline.scoring_stage.notify", new_callable=AsyncMock) as mock_notify:
         await run_scoring(
             job_record=job,
             session=async_session,
@@ -118,7 +131,7 @@ async def test_stretch_role_routes_to_human_queue(async_session: AsyncSession) -
             deal_breakers=[],
             good_fit_threshold=75,
             stretch_threshold=50,
-            sms_settings=_make_sms_settings(),
+            notification_settings=_make_notification_settings(),
         )
 
     assert job.fit_score == 62
@@ -126,12 +139,10 @@ async def test_stretch_role_routes_to_human_queue(async_session: AsyncSession) -
     assert job.queue_reason == "stretch_role"
     assert job.scored_at is not None
 
-    # Verify notification was logged
-    result = await async_session.execute(select(NotificationLog))
-    logs = list(result.scalars().all())
-    assert len(logs) == 1
-    assert logs[0].trigger_reason == "stretch_role"
-    assert logs[0].success == 1
+    # Verify notify was called with correct trigger reason
+    mock_notify.assert_called_once()
+    call_kwargs = mock_notify.call_args.kwargs
+    assert call_kwargs["trigger_reason"] == "stretch_role"
 
 
 @pytest.mark.asyncio
@@ -167,7 +178,7 @@ async def test_low_score_routes_to_skipped(async_session: AsyncSession) -> None:
 
 @pytest.mark.asyncio
 async def test_deal_breaker_overrides_high_score(async_session: AsyncSession) -> None:
-    """A deal-breaker in the description forces skip regardless of score."""
+    """A deal-breaker detected by Claude forces skip regardless of score."""
     job = _make_job_record()
     job.description_text = "We need a senior developer with security clearance required."
     async_session.add(job)
@@ -177,8 +188,8 @@ async def test_deal_breaker_overrides_high_score(async_session: AsyncSession) ->
     mock_client.score_fit.return_value = FitScoreResult(
         fit_score=90,
         rationale="Excellent match on all technical skills.",
-        deal_breaker_found=False,
-        deal_breaker_term=None,
+        deal_breaker_found=True,
+        deal_breaker_term="security clearance",
     )
 
     await run_scoring(
@@ -242,8 +253,7 @@ async def test_boundary_score_routes_to_human_queue(async_session: AsyncSession)
         deal_breaker_term=None,
     )
 
-    with patch("src.pipeline.scoring_stage.send_sms") as mock_send:
-        mock_send.return_value = MagicMock(ok=True, error=None)
+    with patch("src.pipeline.scoring_stage.notify", new_callable=AsyncMock) as mock_notify:
         await run_scoring(
             job_record=job,
             session=async_session,
@@ -253,23 +263,22 @@ async def test_boundary_score_routes_to_human_queue(async_session: AsyncSession)
             deal_breakers=[],
             good_fit_threshold=75,
             stretch_threshold=50,
-            sms_settings=_make_sms_settings(),
+            notification_settings=_make_notification_settings(),
         )
 
     assert job.status == "scored"
     assert job.queue_reason == "score_at_threshold_boundary"
     assert job.scored_at is not None
 
-    # Verify notification was logged
-    result = await async_session.execute(select(NotificationLog))
-    logs = list(result.scalars().all())
-    assert len(logs) == 1
-    assert logs[0].trigger_reason == "score_at_threshold_boundary"
+    # Verify notify was called with correct trigger reason
+    mock_notify.assert_called_once()
+    call_kwargs = mock_notify.call_args.kwargs
+    assert call_kwargs["trigger_reason"] == "score_at_threshold_boundary"
 
 
 @pytest.mark.asyncio
 async def test_no_sms_when_settings_none(async_session: AsyncSession) -> None:
-    """When sms_settings is None, notification is logged but not sent."""
+    """When notification_settings is None, notification is skipped."""
     job = _make_job_record()
     async_session.add(job)
     await async_session.flush()
@@ -282,26 +291,23 @@ async def test_no_sms_when_settings_none(async_session: AsyncSession) -> None:
         deal_breaker_term=None,
     )
 
-    await run_scoring(
-        job_record=job,
-        session=async_session,
-        claude_client=mock_client,
-        resume_content="Python developer",
-        goals_profile='{"target_titles": ["Python Developer"]}',
-        deal_breakers=[],
-        good_fit_threshold=75,
-        stretch_threshold=50,
-        sms_settings=None,
-    )
+    with patch("src.pipeline.scoring_stage.notify", new_callable=AsyncMock) as mock_notify:
+        await run_scoring(
+            job_record=job,
+            session=async_session,
+            claude_client=mock_client,
+            resume_content="Python developer",
+            goals_profile='{"target_titles": ["Python Developer"]}',
+            deal_breakers=[],
+            good_fit_threshold=75,
+            stretch_threshold=50,
+            notification_settings=None,
+        )
 
     assert job.queue_reason == "stretch_role"
 
-    # Notification logged as unsuccessful
-    result = await async_session.execute(select(NotificationLog))
-    logs = list(result.scalars().all())
-    assert len(logs) == 1
-    assert logs[0].success == 0
-    assert logs[0].error_message == "SMS settings not configured"
+    # Notify should not have been called since settings are None
+    mock_notify.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -351,8 +357,7 @@ async def test_boundary_at_stretch_threshold(async_session: AsyncSession) -> Non
         deal_breaker_term=None,
     )
 
-    with patch("src.pipeline.scoring_stage.send_sms") as mock_send:
-        mock_send.return_value = MagicMock(ok=True, error=None)
+    with patch("src.pipeline.scoring_stage.notify", new_callable=AsyncMock) as mock_notify:
         await run_scoring(
             job_record=job,
             session=async_session,
@@ -362,7 +367,7 @@ async def test_boundary_at_stretch_threshold(async_session: AsyncSession) -> Non
             deal_breakers=[],
             good_fit_threshold=75,
             stretch_threshold=50,
-            sms_settings=_make_sms_settings(),
+            notification_settings=_make_notification_settings(),
         )
 
     assert job.status == "scored"

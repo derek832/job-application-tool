@@ -212,7 +212,8 @@ class TestPostRun:
     @pytest.mark.asyncio
     async def test_run_sets_status_to_running(self, client):
         """Triggering a run should set system state to 'running'."""
-        response = await client.post("/run", headers={"Authorization": "Bearer test-secret-token"})
+        with patch("src.api.system_routes.scheduler_trigger_now"):
+            response = await client.post("/run", headers={"Authorization": "Bearer test-secret-token"})
 
         assert response.status_code == 200
         data = response.json()
@@ -305,7 +306,7 @@ class TestGetHealth:
         """Should return a HealthResponse with boolean fields."""
         with (
             patch("src.api.system_routes._check_claude_api", new_callable=AsyncMock) as mock_claude,
-            patch("src.api.system_routes._check_gmail", new_callable=AsyncMock) as mock_gmail,
+            patch("src.api.system_routes._check_gmail_oauth", new_callable=AsyncMock) as mock_gmail,
             patch("src.api.system_routes._check_gdocs", new_callable=AsyncMock) as mock_gdocs,
         ):
             mock_claude.return_value = True

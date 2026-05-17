@@ -13,6 +13,7 @@ from sqlalchemy.orm import sessionmaker
 from src.db.models import Base, JobRecord
 from src.exceptions import GDocsError, TailoringError
 from src.integrations.sms_gateway import SMSSettings
+from src.pipeline.notification_service import NotificationSettings
 from src.pipeline.tailoring_stage import restore_resume_base, run_tailoring
 
 
@@ -51,12 +52,16 @@ async def sample_job_record(async_session: AsyncSession) -> JobRecord:
 
 
 @pytest.fixture
-def sms_settings() -> SMSSettings:
-    """Return sample SMS settings for testing."""
-    return SMSSettings(
-        gmail_user="test@gmail.com",
-        gmail_app_password="app-password",
-        sms_gateway="5551234567@txt.att.net",
+def sms_settings() -> NotificationSettings:
+    """Return sample notification settings for testing."""
+    return NotificationSettings(
+        ntfy_enabled=False,
+        ntfy=None,
+        sms_enabled=True,
+        sms=SMSSettings(
+            gmail_user="test@gmail.com",
+            sms_gateway="5551234567@txt.att.net",
+        ),
     )
 
 
@@ -64,15 +69,16 @@ def sms_settings() -> SMSSettings:
 async def test_tailoring_success(async_session: AsyncSession, sample_job_record: JobRecord):
     """On successful tailoring, status becomes 'applying' and PDF path is stored."""
     resume_base = "Original resume content with skills and experience."
-    tailored = "Tailored resume with ATS keywords for backend engineer role."
+    replacements_json = '[{"find": "skills", "replace": "ATS keywords"}]'
 
     gdocs_client = AsyncMock()
     gdocs_client.read_resume.return_value = resume_base
     gdocs_client.write_resume.return_value = None
-    gdocs_client.export_pdf.return_value = None
+    gdocs_client.tailor_and_export.return_value = 1
 
     claude_client = AsyncMock()
-    claude_client.tailor_resume.return_value = tailored
+    claude_client.tailor_resume.return_value = replacements_json
+    claude_client._extract_json = lambda text: text  # sync staticmethod
 
     await run_tailoring(
         job_record=sample_job_record,
@@ -84,7 +90,7 @@ async def test_tailoring_success(async_session: AsyncSession, sample_job_record:
     await async_session.refresh(sample_job_record)
     assert sample_job_record.status == "applying"
     assert sample_job_record.resume_snapshot == json.dumps(resume_base)
-    assert sample_job_record.tailored_resume_pdf == "data/pdfs/99001.pdf"
+    assert sample_job_record.tailored_resume_pdf == "data/pdfs/TechCo_Backend_Engineer_Resume.pdf"
     assert sample_job_record.error_message is None
     assert sample_job_record.queue_reason is None
 
@@ -100,9 +106,12 @@ async def test_tailoring_stores_resume_snapshot(
     gdocs_client.read_resume.return_value = resume_base
     gdocs_client.write_resume.return_value = None
     gdocs_client.export_pdf.return_value = None
+    gdocs_client.tailor_and_export.return_value = 1
 
+    replacements_json = '[{"find": "skills", "replace": "ATS keywords"}]'
     claude_client = AsyncMock()
-    claude_client.tailor_resume.return_value = "Tailored version"
+    claude_client.tailor_resume.return_value = replacements_json
+    claude_client._extract_json = lambda text: text
 
     await run_tailoring(
         job_record=sample_job_record,
@@ -128,9 +137,12 @@ async def test_tailoring_calls_claude_with_description_and_resume(
     gdocs_client.read_resume.return_value = resume_base
     gdocs_client.write_resume.return_value = None
     gdocs_client.export_pdf.return_value = None
+    gdocs_client.tailor_and_export.return_value = 1
 
+    replacements_json = '[{"find": "skills", "replace": "ATS keywords"}]'
     claude_client = AsyncMock()
-    claude_client.tailor_resume.return_value = "Tailored"
+    claude_client.tailor_resume.return_value = replacements_json
+    claude_client._extract_json = lambda text: text
 
     await run_tailoring(
         job_record=sample_job_record,
@@ -142,12 +154,13 @@ async def test_tailoring_calls_claude_with_description_and_resume(
     claude_client.tailor_resume.assert_called_once_with(
         description=sample_job_record.description_text,
         resume_base=resume_base,
+        supplementary_context=None,
     )
 
 
 @pytest.mark.asyncio
 async def test_tailoring_gdocs_authorization_error_pauses_system(
-    async_session: AsyncSession, sample_job_record: JobRecord, sms_settings: SMSSettings
+    async_session: AsyncSession, sample_job_record: JobRecord, sms_settings: NotificationSettings
 ):
     """On GDocsError with authorization_expired=True, system state is set to error."""
     gdocs_client = AsyncMock()
@@ -163,7 +176,7 @@ async def test_tailoring_gdocs_authorization_error_pauses_system(
             session=async_session,
             gdocs_client=gdocs_client,
             claude_client=claude_client,
-            sms_settings=sms_settings,
+            notification_settings=sms_settings,
         )
 
     # Job status should NOT be changed (remains approved_for_apply)
@@ -208,7 +221,7 @@ async def test_tailoring_gdocs_authorization_error_sets_system_state(
 
 @pytest.mark.asyncio
 async def test_tailoring_gdocs_non_auth_error_sets_resume_failed(
-    async_session: AsyncSession, sample_job_record: JobRecord, sms_settings: SMSSettings
+    async_session: AsyncSession, sample_job_record: JobRecord, sms_settings: NotificationSettings
 ):
     """On non-authorization GDocsError, status becomes 'resume_failed'."""
     gdocs_client = AsyncMock()
@@ -224,7 +237,7 @@ async def test_tailoring_gdocs_non_auth_error_sets_resume_failed(
             session=async_session,
             gdocs_client=gdocs_client,
             claude_client=claude_client,
-            sms_settings=sms_settings,
+            notification_settings=sms_settings,
         )
 
     await async_session.refresh(sample_job_record)
@@ -240,7 +253,7 @@ async def test_tailoring_gdocs_non_auth_error_sets_resume_failed(
 
 @pytest.mark.asyncio
 async def test_tailoring_claude_error_sets_resume_failed(
-    async_session: AsyncSession, sample_job_record: JobRecord, sms_settings: SMSSettings
+    async_session: AsyncSession, sample_job_record: JobRecord, sms_settings: NotificationSettings
 ):
     """On TailoringError from Claude, status becomes 'resume_failed'."""
     resume_base = "Original resume"
@@ -259,7 +272,7 @@ async def test_tailoring_claude_error_sets_resume_failed(
             session=async_session,
             gdocs_client=gdocs_client,
             claude_client=claude_client,
-            sms_settings=sms_settings,
+            notification_settings=sms_settings,
         )
 
     await async_session.refresh(sample_job_record)
@@ -274,15 +287,18 @@ async def test_tailoring_claude_error_sets_resume_failed(
 async def test_tailoring_write_failure_sets_resume_failed(
     async_session: AsyncSession, sample_job_record: JobRecord
 ):
-    """On GDocsError during write_resume, status becomes 'resume_failed'."""
+    """On GDocsError during tailor_and_export, status becomes 'resume_failed'."""
+    replacements_json = '[{"find": "skills", "replace": "ATS keywords"}]'
+
     gdocs_client = AsyncMock()
     gdocs_client.read_resume.return_value = "Original resume"
-    gdocs_client.write_resume.side_effect = GDocsError(
+    gdocs_client.tailor_and_export.side_effect = GDocsError(
         "Write failed after 3 attempts", authorization_expired=False
     )
 
     claude_client = AsyncMock()
-    claude_client.tailor_resume.return_value = "Tailored resume"
+    claude_client.tailor_resume.return_value = replacements_json
+    claude_client._extract_json = lambda text: text
 
     with patch("src.pipeline.tailoring_stage.notify", new_callable=AsyncMock):
         await run_tailoring(
@@ -301,16 +317,18 @@ async def test_tailoring_write_failure_sets_resume_failed(
 async def test_tailoring_export_pdf_failure_sets_resume_failed(
     async_session: AsyncSession, sample_job_record: JobRecord
 ):
-    """On GDocsError during export_pdf, status becomes 'resume_failed'."""
+    """On GDocsError during tailor_and_export, status becomes 'resume_failed'."""
+    replacements_json = '[{"find": "skills", "replace": "ATS keywords"}]'
+
     gdocs_client = AsyncMock()
     gdocs_client.read_resume.return_value = "Original resume"
-    gdocs_client.write_resume.return_value = None
-    gdocs_client.export_pdf.side_effect = GDocsError(
+    gdocs_client.tailor_and_export.side_effect = GDocsError(
         "PDF export failed", authorization_expired=False
     )
 
     claude_client = AsyncMock()
-    claude_client.tailor_resume.return_value = "Tailored resume"
+    claude_client.tailor_resume.return_value = replacements_json
+    claude_client._extract_json = lambda text: text
 
     with patch("src.pipeline.tailoring_stage.notify", new_callable=AsyncMock):
         await run_tailoring(
@@ -329,7 +347,7 @@ async def test_tailoring_export_pdf_failure_sets_resume_failed(
 async def test_tailoring_no_sms_settings_skips_notification(
     async_session: AsyncSession, sample_job_record: JobRecord
 ):
-    """When sms_settings is None, notification is not attempted on failure."""
+    """When notification_settings is None, notification is not attempted on failure."""
     gdocs_client = AsyncMock()
     gdocs_client.read_resume.side_effect = GDocsError(
         "Network error", authorization_expired=False
@@ -343,10 +361,10 @@ async def test_tailoring_no_sms_settings_skips_notification(
             session=async_session,
             gdocs_client=gdocs_client,
             claude_client=claude_client,
-            sms_settings=None,
+            notification_settings=None,
         )
 
-    # notify should not be called when sms_settings is None
+    # notify should not be called when notification_settings is None
     mock_notify.assert_not_called()
 
     await async_session.refresh(sample_job_record)

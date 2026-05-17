@@ -17,7 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.api.schemas import JobRecordOut, StatsOut
 from src.api.system_routes import verify_token
 from src.db.database import get_session
-from src.db.job_repo import get_job_record, get_stats, list_jobs
+from src.db.job_repo import get_external_apply_stats, get_job_record, get_stats, list_jobs
 
 logger = structlog.get_logger(__name__)
 
@@ -83,6 +83,29 @@ async def get_job_stats(
 
     stats_data = await get_stats(session)
     return StatsOut(**stats_data)
+
+
+# ---------------------------------------------------------------------------
+# GET /jobs/stats/external-apply
+# ---------------------------------------------------------------------------
+
+
+@router.get("/stats/external-apply")
+async def get_external_apply_statistics(
+    session: AsyncSession = Depends(get_session),
+    _: None = Depends(verify_token),
+) -> dict:
+    """Return statistics on external apply attempts and extraction methods.
+
+    Tracks how often DOM extraction succeeds vs. when vision would be needed.
+    Useful for evaluating whether a local vision model is worth the complexity.
+
+    Returns:
+        Dict with total_attempts, dom_success, dom_failed, vision_used,
+        dom_success_rate, avg_dom_fields, avg_fields_filled, and outcomes breakdown.
+    """
+    logger.info("get_external_apply_stats_requested")
+    return await get_external_apply_stats(session)
 
 
 # ---------------------------------------------------------------------------

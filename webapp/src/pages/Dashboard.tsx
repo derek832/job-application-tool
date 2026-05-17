@@ -1,6 +1,6 @@
 import { useState, useCallback } from "react";
-import { getStatus, getActivityLog, triggerRun, pause, resume, ApiError } from "../api/client";
-import type { StatusResponse, LogEntry } from "../api/client";
+import { getStatus, getActivityLog, getRunHistory, triggerRun, pause, resume, ApiError } from "../api/client";
+import type { StatusResponse, LogEntry, RunHistoryItem } from "../api/client";
 import { usePolling } from "../hooks/usePolling";
 
 const STATUS_COLORS: Record<string, string> = {
@@ -28,12 +28,36 @@ function formatTime(iso: string | null): string {
   });
 }
 
+function formatRelativeTime(iso: string): string {
+  const now = Date.now();
+  const then = new Date(iso).getTime();
+  const diffMs = now - then;
+
+  if (diffMs < 0) return "just now";
+
+  const seconds = Math.floor(diffMs / 1000);
+  if (seconds < 60) return "just now";
+
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return minutes === 1 ? "1 minute ago" : `${minutes} minutes ago`;
+
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return hours === 1 ? "1 hour ago" : `${hours} hours ago`;
+
+  const days = Math.floor(hours / 24);
+  if (days < 30) return days === 1 ? "1 day ago" : `${days} days ago`;
+
+  const months = Math.floor(days / 30);
+  return months === 1 ? "1 month ago" : `${months} months ago`;
+}
+
 export function Dashboard(): React.JSX.Element {
   const [data, setData] = useState<StatusResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [actionLoading, setActionLoading] = useState(false);
   const [activityLog, setActivityLog] = useState<LogEntry[]>([]);
+  const [runHistory, setRunHistory] = useState<RunHistoryItem[]>([]);
 
   const fetchStatus = useCallback(async () => {
     try {
@@ -56,10 +80,20 @@ export function Dashboard(): React.JSX.Element {
     }
   }, []);
 
+  const fetchRunHistory = useCallback(async () => {
+    try {
+      const items = await getRunHistory(5);
+      setRunHistory(items);
+    } catch {
+      // Non-critical — don't show error for run history fetch failures
+    }
+  }, []);
+
   const pollCallback = useCallback(() => {
     fetchStatus();
     fetchLog();
-  }, [fetchStatus, fetchLog]);
+    fetchRunHistory();
+  }, [fetchStatus, fetchLog, fetchRunHistory]);
 
   // Poll status and activity log every 60 seconds
   usePolling(pollCallback, 60_000);
@@ -200,6 +234,25 @@ export function Dashboard(): React.JSX.Element {
             <p className="text-sm font-medium text-gray-900">{formatTime(data.next_run_at)}</p>
           </div>
         </div>
+      </div>
+
+      {/* Run History */}
+      <div className="bg-white rounded-xl border border-gray-200 p-4 shadow-sm">
+        <p className="text-xs text-gray-500 mb-3">Run History</p>
+        {runHistory.length === 0 ? (
+          <p className="text-xs text-gray-400">No runs have completed yet</p>
+        ) : (
+          <div className="space-y-2 max-h-60 overflow-y-auto">
+            {runHistory.map((entry) => (
+              <div key={entry.id} className="py-2 border-t border-gray-100 first:border-0">
+                <p className="text-xs text-gray-400 mb-0.5">
+                  {formatRelativeTime(entry.created_at)}
+                </p>
+                <p className="text-xs text-gray-700">{entry.summary}</p>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
 
       {/* Activity Log */}
