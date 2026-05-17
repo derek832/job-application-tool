@@ -116,7 +116,11 @@ async def _check_chrome_reachable(cdp_url: str) -> bool:
     """
     try:
         async with httpx.AsyncClient() as client:
-            resp = await client.get(f"{cdp_url}/json/version", timeout=5.0)
+            resp = await client.get(
+                f"{cdp_url}/json/version",
+                timeout=5.0,
+                headers={"Host": "localhost"},
+            )
             if resp.status_code == 200:
                 logger.info("health_check_chrome_reachable", cdp_url=cdp_url)
                 return True

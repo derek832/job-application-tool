@@ -731,7 +731,7 @@ async def _connect_to_chrome(pw, cdp_url: str):
     # Strategy 2: Discover fresh websocket URL from /json/version
     try:
         async with httpx.AsyncClient(follow_redirects=True) as client:
-            resp = await client.get(f"{cdp_url}/json/version", timeout=5.0)
+            resp = await client.get(f"{cdp_url}/json/version", timeout=5.0, headers={"Host": "localhost"})
             if resp.status_code == 200:
                 version_data = resp.json()
                 ws_url = version_data.get("webSocketDebuggerUrl", "")
