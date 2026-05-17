@@ -36,6 +36,8 @@ ConfigKey = Literal[
     "ntfy_urgent_topic",
     "ntfy_info_topic",
     "lan_base_url",
+    "schedule_config",
+    "blacklist_config",
 ]
 
 VALID_CONFIG_KEYS: frozenset[str] = frozenset(
@@ -51,6 +53,8 @@ VALID_CONFIG_KEYS: frozenset[str] = frozenset(
         "ntfy_urgent_topic",
         "ntfy_info_topic",
         "lan_base_url",
+        "schedule_config",
+        "blacklist_config",
     }
 )
 

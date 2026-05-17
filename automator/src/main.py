@@ -20,16 +20,26 @@ from urllib.parse import urlparse
 import structlog
 from fastapi import FastAPI
 
+from src.api.chrome_routes import router as chrome_router
 from src.api.config_routes import router as config_router
+from src.api.config_routes import schedule_router
+from src.api.health_routes import router as health_router
 from src.api.job_routes import router as job_router
 from src.api.lan_server import create_lan_app, start_lan_server
 from src.api.log_routes import router as log_router
+from src.api.preview_routes import router as preview_router
 from src.api.queue_routes import router as queue_router
 from src.api.run_routes import router as run_router
 from src.api.system_routes import router as system_router
 from src.db.config_repo import get_config, set_config
 from src.db.database import build_engine, get_session, init_db
 from src.integrations.ntfy_topic_gen import ensure_topics
+from src.pipeline.quiet_hours import register_quiet_hours_flush_job
+from src.scheduler.schedule_manager import (
+    ScheduleConfig,
+    apply_schedule,
+    validate_schedule_config,
+)
 from src.scheduler.scheduler import setup_scheduler
 
 logger = structlog.get_logger(__name__)
@@ -174,6 +184,52 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # Register the scheduler
     setup_scheduler(app, scheduled_time)
 
+    # Load schedule_config from database and apply APScheduler triggers
+    async for session in get_session():
+        schedule_config_data = await get_config(session, "schedule_config")
+        break
+
+    if schedule_config_data and isinstance(schedule_config_data, dict):
+        try:
+            config = ScheduleConfig(
+                mode=schedule_config_data.get("mode", "specific_times"),
+                times=schedule_config_data.get("times", []),
+                interval_hours=schedule_config_data.get("interval_hours", 2),
+                window_start=schedule_config_data.get("window_start", "08:00"),
+                window_end=schedule_config_data.get("window_end", "20:00"),
+                weekend_runs=schedule_config_data.get("weekend_runs", False),
+                timezone=schedule_config_data.get("timezone", "America/New_York"),
+                quiet_hours_start=schedule_config_data.get("quiet_hours_start"),
+                quiet_hours_end=schedule_config_data.get("quiet_hours_end"),
+            )
+            validate_schedule_config(config)
+            apply_schedule(app.state.scheduler, config)
+            logger.info(
+                "schedule_config_applied_on_startup",
+                mode=config.mode,
+                timezone=config.timezone,
+            )
+
+            # Register quiet hours flush job if quiet_hours_end is configured
+            if config.quiet_hours_end:
+                register_quiet_hours_flush_job(
+                    app.state.scheduler,
+                    config.quiet_hours_end,
+                    config.timezone,
+                )
+                logger.info(
+                    "quiet_hours_flush_registered_on_startup",
+                    quiet_hours_end=config.quiet_hours_end,
+                    timezone=config.timezone,
+                )
+        except (ValueError, KeyError) as exc:
+            logger.warning(
+                "schedule_config_invalid_on_startup",
+                error=str(exc),
+            )
+    else:
+        logger.info("schedule_config_not_found", reason="no schedule_config in database")
+
     logger.info("startup_complete", host="0.0.0.0", port=7432)
 
     yield
@@ -201,10 +257,14 @@ app = FastAPI(
 # Register routers
 app.include_router(system_router)
 app.include_router(config_router)
+app.include_router(schedule_router)
 app.include_router(job_router)
 app.include_router(log_router)
 app.include_router(queue_router)
 app.include_router(run_router)
+app.include_router(preview_router)
+app.include_router(health_router)
+app.include_router(chrome_router)
 
 
 if __name__ == "__main__":

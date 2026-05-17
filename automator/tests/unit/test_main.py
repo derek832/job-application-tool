@@ -69,7 +69,7 @@ class TestLifespan:
         with (
             patch("src.main.build_engine", return_value=mock_engine) as mock_build,
             patch("src.main.init_db", new_callable=AsyncMock) as mock_init,
-            patch("src.main.get_session", side_effect=[fake_get_session(), fake_get_session(), fake_get_session(), fake_get_session(), fake_get_session()]),
+            patch("src.main.get_session", side_effect=[fake_get_session(), fake_get_session(), fake_get_session(), fake_get_session(), fake_get_session(), fake_get_session()]),
             patch("src.main.get_config", side_effect=fake_get_config),
             patch("src.main.set_config", new_callable=AsyncMock),
             patch("src.main.setup_scheduler") as mock_sched,
@@ -112,7 +112,7 @@ class TestLifespan:
         with (
             patch("src.main.build_engine", return_value=mock_engine),
             patch("src.main.init_db", new_callable=AsyncMock),
-            patch("src.main.get_session", side_effect=[fake_get_session(), fake_get_session(), fake_get_session(), fake_get_session(), fake_get_session()]),
+            patch("src.main.get_session", side_effect=[fake_get_session(), fake_get_session(), fake_get_session(), fake_get_session(), fake_get_session(), fake_get_session()]),
             patch("src.main.get_config", side_effect=fake_get_config),
             patch("src.main.set_config", side_effect=fake_set_config),
             patch("src.main.setup_scheduler") as mock_sched,
@@ -156,7 +156,7 @@ class TestLifespan:
         with (
             patch("src.main.build_engine", return_value=mock_engine),
             patch("src.main.init_db", new_callable=AsyncMock),
-            patch("src.main.get_session", side_effect=[fake_get_session(), fake_get_session(), fake_get_session(), fake_get_session(), fake_get_session()]),
+            patch("src.main.get_session", side_effect=[fake_get_session(), fake_get_session(), fake_get_session(), fake_get_session(), fake_get_session(), fake_get_session()]),
             patch("src.main.get_config", side_effect=fake_get_config),
             patch("src.main.set_config", side_effect=fake_set_config),
             patch("src.main.setup_scheduler") as mock_sched,
@@ -195,7 +195,7 @@ class TestLifespan:
         with (
             patch("src.main.build_engine", return_value=mock_engine),
             patch("src.main.init_db", new_callable=AsyncMock),
-            patch("src.main.get_session", side_effect=[fake_get_session(), fake_get_session(), fake_get_session(), fake_get_session(), fake_get_session()]),
+            patch("src.main.get_session", side_effect=[fake_get_session(), fake_get_session(), fake_get_session(), fake_get_session(), fake_get_session(), fake_get_session()]),
             patch("src.main.get_config", side_effect=fake_get_config),
             patch("src.main.set_config", new_callable=AsyncMock),
             patch("src.main.setup_scheduler") as mock_sched,
@@ -232,7 +232,7 @@ class TestLifespan:
         with (
             patch("src.main.build_engine", return_value=mock_engine),
             patch("src.main.init_db", new_callable=AsyncMock),
-            patch("src.main.get_session", side_effect=[fake_get_session(), fake_get_session(), fake_get_session(), fake_get_session(), fake_get_session()]),
+            patch("src.main.get_session", side_effect=[fake_get_session(), fake_get_session(), fake_get_session(), fake_get_session(), fake_get_session(), fake_get_session()]),
             patch("src.main.get_config", side_effect=fake_get_config),
             patch("src.main.set_config", new_callable=AsyncMock),
             patch("src.main.setup_scheduler") as mock_sched,
@@ -272,7 +272,7 @@ class TestLifespan:
         with (
             patch("src.main.build_engine", return_value=mock_engine),
             patch("src.main.init_db", new_callable=AsyncMock),
-            patch("src.main.get_session", side_effect=[fake_get_session(), fake_get_session(), fake_get_session(), fake_get_session(), fake_get_session()]),
+            patch("src.main.get_session", side_effect=[fake_get_session(), fake_get_session(), fake_get_session(), fake_get_session(), fake_get_session(), fake_get_session()]),
             patch("src.main.get_config", side_effect=fake_get_config),
             patch("src.main.set_config", new_callable=AsyncMock),
             patch("src.main.setup_scheduler") as mock_sched,
@@ -293,3 +293,181 @@ class TestLifespan:
                 pass
 
         mock_scheduler_instance.shutdown.assert_called_once_with(wait=False)
+
+    async def test_startup_applies_schedule_config_from_database(self) -> None:
+        """Lifespan startup loads schedule_config and calls apply_schedule."""
+        mock_engine = MagicMock()
+        mock_engine.dispose = AsyncMock()
+
+        mock_session = AsyncMock()
+        mock_session.commit = AsyncMock()
+
+        async def fake_get_session():
+            yield mock_session
+
+        mock_scheduler_instance = MagicMock(running=True, shutdown=MagicMock())
+
+        schedule_data = {
+            "mode": "specific_times",
+            "times": ["09:00", "13:00", "17:00"],
+            "interval_hours": 2,
+            "window_start": "08:00",
+            "window_end": "20:00",
+            "weekend_runs": False,
+            "timezone": "America/New_York",
+            "quiet_hours_start": "22:00",
+            "quiet_hours_end": "07:00",
+        }
+
+        async def fake_get_config(session, key):
+            if key == "api_token":
+                return "token"
+            if key == "settings":
+                return {"good_fit_threshold": 75, "stretch_threshold": 50, "dry_run": False}
+            if key == "schedule_config":
+                return schedule_data
+            return None
+
+        with (
+            patch("src.main.build_engine", return_value=mock_engine),
+            patch("src.main.init_db", new_callable=AsyncMock),
+            patch("src.main.get_session", side_effect=[fake_get_session(), fake_get_session(), fake_get_session(), fake_get_session(), fake_get_session(), fake_get_session()]),
+            patch("src.main.get_config", side_effect=fake_get_config),
+            patch("src.main.set_config", new_callable=AsyncMock),
+            patch("src.main.setup_scheduler") as mock_sched,
+            patch("src.main.apply_schedule") as mock_apply,
+            patch("src.main.register_quiet_hours_flush_job") as mock_flush_job,
+            patch("src.main.ensure_topics", new_callable=AsyncMock),
+            patch("src.main.create_lan_app"),
+            patch("src.main.start_lan_server", new_callable=AsyncMock),
+        ):
+            def side_effect_setup(a, t):
+                a.state.scheduler = mock_scheduler_instance
+                return mock_scheduler_instance
+
+            mock_sched.side_effect = side_effect_setup
+
+            from src.main import lifespan
+
+            async with lifespan(app):
+                pass
+
+        # apply_schedule should have been called with the scheduler and config
+        mock_apply.assert_called_once()
+        call_args = mock_apply.call_args
+        assert call_args[0][0] is mock_scheduler_instance
+
+        # quiet hours flush job should have been registered
+        mock_flush_job.assert_called_once_with(
+            mock_scheduler_instance,
+            "07:00",
+            "America/New_York",
+        )
+
+    async def test_startup_skips_schedule_when_not_configured(self) -> None:
+        """Lifespan startup skips apply_schedule when no schedule_config exists."""
+        mock_engine = MagicMock()
+        mock_engine.dispose = AsyncMock()
+
+        mock_session = AsyncMock()
+        mock_session.commit = AsyncMock()
+
+        async def fake_get_session():
+            yield mock_session
+
+        mock_scheduler_instance = MagicMock(running=True, shutdown=MagicMock())
+
+        async def fake_get_config(session, key):
+            if key == "api_token":
+                return "token"
+            if key == "settings":
+                return {"good_fit_threshold": 75, "stretch_threshold": 50, "dry_run": False}
+            return None
+
+        with (
+            patch("src.main.build_engine", return_value=mock_engine),
+            patch("src.main.init_db", new_callable=AsyncMock),
+            patch("src.main.get_session", side_effect=[fake_get_session(), fake_get_session(), fake_get_session(), fake_get_session(), fake_get_session(), fake_get_session()]),
+            patch("src.main.get_config", side_effect=fake_get_config),
+            patch("src.main.set_config", new_callable=AsyncMock),
+            patch("src.main.setup_scheduler") as mock_sched,
+            patch("src.main.apply_schedule") as mock_apply,
+            patch("src.main.register_quiet_hours_flush_job") as mock_flush_job,
+            patch("src.main.ensure_topics", new_callable=AsyncMock),
+            patch("src.main.create_lan_app"),
+            patch("src.main.start_lan_server", new_callable=AsyncMock),
+        ):
+            def side_effect_setup(a, t):
+                a.state.scheduler = mock_scheduler_instance
+                return mock_scheduler_instance
+
+            mock_sched.side_effect = side_effect_setup
+
+            from src.main import lifespan
+
+            async with lifespan(app):
+                pass
+
+        # apply_schedule should NOT have been called
+        mock_apply.assert_not_called()
+        mock_flush_job.assert_not_called()
+
+    async def test_startup_skips_quiet_hours_flush_when_not_configured(self) -> None:
+        """Lifespan startup skips quiet hours flush job when quiet_hours_end is None."""
+        mock_engine = MagicMock()
+        mock_engine.dispose = AsyncMock()
+
+        mock_session = AsyncMock()
+        mock_session.commit = AsyncMock()
+
+        async def fake_get_session():
+            yield mock_session
+
+        mock_scheduler_instance = MagicMock(running=True, shutdown=MagicMock())
+
+        schedule_data = {
+            "mode": "specific_times",
+            "times": ["09:00", "17:00"],
+            "weekend_runs": False,
+            "timezone": "America/New_York",
+            "quiet_hours_start": None,
+            "quiet_hours_end": None,
+        }
+
+        async def fake_get_config(session, key):
+            if key == "api_token":
+                return "token"
+            if key == "settings":
+                return {"good_fit_threshold": 75, "stretch_threshold": 50, "dry_run": False}
+            if key == "schedule_config":
+                return schedule_data
+            return None
+
+        with (
+            patch("src.main.build_engine", return_value=mock_engine),
+            patch("src.main.init_db", new_callable=AsyncMock),
+            patch("src.main.get_session", side_effect=[fake_get_session(), fake_get_session(), fake_get_session(), fake_get_session(), fake_get_session(), fake_get_session()]),
+            patch("src.main.get_config", side_effect=fake_get_config),
+            patch("src.main.set_config", new_callable=AsyncMock),
+            patch("src.main.setup_scheduler") as mock_sched,
+            patch("src.main.apply_schedule") as mock_apply,
+            patch("src.main.register_quiet_hours_flush_job") as mock_flush_job,
+            patch("src.main.ensure_topics", new_callable=AsyncMock),
+            patch("src.main.create_lan_app"),
+            patch("src.main.start_lan_server", new_callable=AsyncMock),
+        ):
+            def side_effect_setup(a, t):
+                a.state.scheduler = mock_scheduler_instance
+                return mock_scheduler_instance
+
+            mock_sched.side_effect = side_effect_setup
+
+            from src.main import lifespan
+
+            async with lifespan(app):
+                pass
+
+        # apply_schedule should have been called (schedule exists)
+        mock_apply.assert_called_once()
+        # But quiet hours flush should NOT have been registered
+        mock_flush_job.assert_not_called()

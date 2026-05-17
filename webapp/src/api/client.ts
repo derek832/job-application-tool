@@ -155,6 +155,45 @@ export const LanDetectResponseSchema = z.object({
   port: z.number().int(),
 });
 
+export const ScheduleConfigResponseSchema = z.object({
+  mode: z.enum(["specific_times", "interval"]).default("specific_times"),
+  times: z.array(z.string()).default([]),
+  interval_hours: z.number().int().default(2),
+  window_start: z.string().default("08:00"),
+  window_end: z.string().default("20:00"),
+  weekend_runs: z.boolean().default(false),
+  timezone: z.string().default("America/New_York"),
+  quiet_hours_start: z.string().nullable().default(null),
+  quiet_hours_end: z.string().nullable().default(null),
+});
+
+export const ScheduleNextResponseSchema = z.object({
+  next_runs: z.array(z.string()),
+});
+
+// ---------------------------------------------------------------------------
+// Chrome & Session Health Schemas
+// ---------------------------------------------------------------------------
+
+export const ChromeStatusResponseSchema = z.object({
+  connected: z.boolean(),
+  browser_version: z.string().nullable().optional(),
+  debugger_url: z.string().nullable().optional(),
+});
+
+export const SessionHealthResponseSchema = z.object({
+  chrome_reachable: z.boolean(),
+  linkedin_authenticated: z.boolean(),
+  error_message: z.string().nullable(),
+  checked_at: z.string(),
+});
+
+export const ChromeLaunchResponseSchema = z.object({
+  success: z.boolean(),
+  message: z.string(),
+  already_running: z.boolean().optional(),
+});
+
 // ---------------------------------------------------------------------------
 // Inferred TypeScript Types
 // ---------------------------------------------------------------------------
@@ -169,6 +208,23 @@ export type GoalsProfile = z.infer<typeof GoalsProfileSchema>;
 export type UserProfile = z.infer<typeof UserProfileSchema>;
 export type Settings = z.infer<typeof SettingsSchema>;
 export type LanDetectResponse = z.infer<typeof LanDetectResponseSchema>;
+export type ScheduleConfigResponse = z.infer<typeof ScheduleConfigResponseSchema>;
+export type ScheduleNextResponse = z.infer<typeof ScheduleNextResponseSchema>;
+
+export interface ScheduleConfigUpdate {
+  mode: "specific_times" | "interval";
+  times: string[];
+  interval_hours: number;
+  window_start: string;
+  window_end: string;
+  weekend_runs: boolean;
+  timezone: string;
+  quiet_hours_start: string | null;
+  quiet_hours_end: string | null;
+}
+export type ChromeStatusResponse = z.infer<typeof ChromeStatusResponseSchema>;
+export type SessionHealthResponse = z.infer<typeof SessionHealthResponseSchema>;
+export type ChromeLaunchResponse = z.infer<typeof ChromeLaunchResponseSchema>;
 
 // ---------------------------------------------------------------------------
 // Internal Helpers
@@ -341,6 +397,41 @@ export async function detectLanIp(signal?: AbortSignal): Promise<LanDetectRespon
 }
 
 // ---------------------------------------------------------------------------
+// Schedule Configuration
+// ---------------------------------------------------------------------------
+
+export async function getScheduleConfig(): Promise<ScheduleConfigResponse> {
+  return request("/config/schedule", ScheduleConfigResponseSchema);
+}
+
+export async function updateScheduleConfig(data: ScheduleConfigUpdate): Promise<ScheduleConfigResponse> {
+  return request("/config/schedule", ScheduleConfigResponseSchema, {
+    method: "PUT",
+    body: JSON.stringify(data),
+  });
+}
+
+export async function getScheduleNext(): Promise<ScheduleNextResponse> {
+  return request("/schedule/next", ScheduleNextResponseSchema);
+}
+
+// ---------------------------------------------------------------------------
+// Chrome & Session Health
+// ---------------------------------------------------------------------------
+
+export async function getChromeStatus(): Promise<ChromeStatusResponse> {
+  return request("/chrome/status", ChromeStatusResponseSchema);
+}
+
+export async function getSessionHealth(): Promise<SessionHealthResponse> {
+  return request("/health/session", SessionHealthResponseSchema);
+}
+
+export async function launchChrome(): Promise<ChromeLaunchResponse> {
+  return request("/chrome/launch", ChromeLaunchResponseSchema, { method: "POST" });
+}
+
+// ---------------------------------------------------------------------------
 // Ntfy Configuration
 // ---------------------------------------------------------------------------
 
@@ -353,6 +444,64 @@ export async function updateNtfyConfig(data: NtfyConfigUpdate): Promise<NtfyConf
     method: "PUT",
     body: JSON.stringify(data),
   });
+}
+
+// ---------------------------------------------------------------------------
+// Preview Pipeline
+// ---------------------------------------------------------------------------
+
+export const PreviewJobOutSchema = z.object({
+  job_id: z.string(),
+  job_title: z.string(),
+  company: z.string(),
+  linkedin_url: z.string(),
+  fit_score: z.number().int().nullable(),
+  fit_rationale: z.string().nullable(),
+  projected_action: z.string(),
+  promoted: z.boolean(),
+});
+
+export const PreviewRunResponseSchema = z.object({
+  id: z.string(),
+  status: z.string(),
+  started_at: z.string(),
+  completed_at: z.string().nullable(),
+  error_message: z.string().nullable(),
+  total_discovered: z.number().int(),
+  total_scored: z.number().int(),
+  total_blacklisted: z.number().int(),
+  jobs: z.array(PreviewJobOutSchema),
+});
+
+export const PreviewTriggerResponseSchema = z.object({
+  run_id: z.string(),
+  status: z.string(),
+});
+
+export const PromoteResponseSchema = z.object({
+  promoted_ids: z.array(z.string()),
+  count: z.number().int(),
+});
+
+export type PreviewJobOut = z.infer<typeof PreviewJobOutSchema>;
+export type PreviewRunResponse = z.infer<typeof PreviewRunResponseSchema>;
+export type PreviewTriggerResponse = z.infer<typeof PreviewTriggerResponseSchema>;
+export type PromoteResponse = z.infer<typeof PromoteResponseSchema>;
+
+export async function triggerPreview(): Promise<PreviewTriggerResponse> {
+  return request("/preview", PreviewTriggerResponseSchema, { method: "POST" });
+}
+
+export async function getPreviewRun(runId: string): Promise<PreviewRunResponse> {
+  return request(`/preview/${encodeURIComponent(runId)}`, PreviewRunResponseSchema);
+}
+
+export async function promotePreviewJobs(runId: string, jobIds: string[]): Promise<PromoteResponse> {
+  return request(
+    `/preview/${encodeURIComponent(runId)}/promote`,
+    PromoteResponseSchema,
+    { method: "POST", body: JSON.stringify({ job_ids: jobIds }) }
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -443,6 +592,55 @@ export async function getRunHistory(limit: number = 5): Promise<RunHistoryItem[]
     RunHistoryResponseSchema
   );
   return result.items;
+}
+
+
+
+// ---------------------------------------------------------------------------
+// Blacklist Configuration
+// ---------------------------------------------------------------------------
+
+export const BlacklistEntrySchema = z.object({
+  value: z.string(),
+  hit_count: z.number().int(),
+});
+
+export const BlacklistConfigResponseSchema = z.object({
+  companies: z.array(BlacklistEntrySchema),
+  title_patterns: z.array(BlacklistEntrySchema),
+});
+
+export type BlacklistEntry = z.infer<typeof BlacklistEntrySchema>;
+export type BlacklistConfigResponse = z.infer<typeof BlacklistConfigResponseSchema>;
+
+export async function getBlacklistConfig(): Promise<BlacklistConfigResponse> {
+  return request("/config/blacklist", BlacklistConfigResponseSchema);
+}
+
+export async function addBlacklistCompany(value: string): Promise<void> {
+  return requestVoid("/config/blacklist/companies", {
+    method: "POST",
+    body: JSON.stringify({ value }),
+  });
+}
+
+export async function removeBlacklistCompany(entry: string): Promise<void> {
+  return requestVoid(`/config/blacklist/companies/${encodeURIComponent(entry)}`, {
+    method: "DELETE",
+  });
+}
+
+export async function addBlacklistTitle(value: string): Promise<void> {
+  return requestVoid("/config/blacklist/titles", {
+    method: "POST",
+    body: JSON.stringify({ value }),
+  });
+}
+
+export async function removeBlacklistTitle(entry: string): Promise<void> {
+  return requestVoid(`/config/blacklist/titles/${encodeURIComponent(entry)}`, {
+    method: "DELETE",
+  });
 }
 
 // ---------------------------------------------------------------------------

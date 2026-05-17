@@ -168,5 +168,6 @@ async def test_valid_config_keys_matches_literal(session: AsyncSession) -> None:
         "settings", "system_state", "api_token",
         "ntfy_enabled", "ntfy_server_url", "ntfy_urgent_topic",
         "ntfy_info_topic", "lan_base_url",
+        "schedule_config", "blacklist_config",
     }
     assert VALID_CONFIG_KEYS == expected

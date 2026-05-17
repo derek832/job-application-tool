@@ -1,6 +1,6 @@
-import { useState, useCallback } from "react";
-import { getStatus, getActivityLog, getRunHistory, triggerRun, pause, resume, ApiError } from "../api/client";
-import type { StatusResponse, LogEntry, RunHistoryItem } from "../api/client";
+import { useState, useCallback, useRef, useEffect } from "react";
+import { getStatus, getActivityLog, getRunHistory, triggerRun, triggerPreview, getPreviewRun, pause, resume, getChromeStatus, getSessionHealth, launchChrome, ApiError } from "../api/client";
+import type { StatusResponse, LogEntry, RunHistoryItem, ChromeStatusResponse, SessionHealthResponse } from "../api/client";
 import { usePolling } from "../hooks/usePolling";
 
 const STATUS_COLORS: Record<string, string> = {
@@ -51,13 +51,24 @@ function formatRelativeTime(iso: string): string {
   return months === 1 ? "1 month ago" : `${months} months ago`;
 }
 
-export function Dashboard(): React.JSX.Element {
+interface DashboardProps {
+  onPreviewComplete?: (runId: string) => void;
+}
+
+export function Dashboard({ onPreviewComplete }: DashboardProps): React.JSX.Element {
   const [data, setData] = useState<StatusResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [actionLoading, setActionLoading] = useState(false);
   const [activityLog, setActivityLog] = useState<LogEntry[]>([]);
   const [runHistory, setRunHistory] = useState<RunHistoryItem[]>([]);
+  const [chromeStatus, setChromeStatus] = useState<ChromeStatusResponse | null>(null);
+  const [sessionHealth, setSessionHealth] = useState<SessionHealthResponse | null>(null);
+  const [healthCheckLoading, setHealthCheckLoading] = useState(false);
+  const [chromeLaunchLoading, setChromeLaunchLoading] = useState(false);
+  const [previewStatus, setPreviewStatus] = useState<"idle" | "running" | "completed" | "failed">("idle");
+  const [, setPreviewRunId] = useState<string | null>(null);
+  const previewPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const fetchStatus = useCallback(async () => {
     try {
@@ -89,11 +100,22 @@ export function Dashboard(): React.JSX.Element {
     }
   }, []);
 
+  const fetchChromeStatus = useCallback(async () => {
+    try {
+      const status = await getChromeStatus();
+      setChromeStatus(status);
+    } catch {
+      // Non-critical — Chrome may not be running
+      setChromeStatus({ connected: false });
+    }
+  }, []);
+
   const pollCallback = useCallback(() => {
     fetchStatus();
     fetchLog();
     fetchRunHistory();
-  }, [fetchStatus, fetchLog, fetchRunHistory]);
+    fetchChromeStatus();
+  }, [fetchStatus, fetchLog, fetchRunHistory, fetchChromeStatus]);
 
   // Poll status and activity log every 60 seconds
   usePolling(pollCallback, 60_000);
@@ -122,6 +144,82 @@ export function Dashboard(): React.JSX.Element {
       await fetchStatus();
     } catch (e) {
       setError(e instanceof ApiError ? e.message : "Action failed");
+    } finally {
+      setActionLoading(false);
+    }
+  }
+
+  async function handleCheckSessionHealth() {
+    setHealthCheckLoading(true);
+    try {
+      const result = await getSessionHealth();
+      setSessionHealth(result);
+      // Also refresh chrome status since health check verifies Chrome
+      setChromeStatus({ connected: result.chrome_reachable });
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : "Health check failed");
+    } finally {
+      setHealthCheckLoading(false);
+    }
+  }
+
+  async function handleLaunchChrome() {
+    setChromeLaunchLoading(true);
+    try {
+      await launchChrome();
+      // Refresh Chrome status after launch
+      await fetchChromeStatus();
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : "Chrome launch failed");
+    } finally {
+      setChromeLaunchLoading(false);
+    }
+  }
+
+  // Clean up preview polling on unmount
+  useEffect(() => {
+    return () => {
+      if (previewPollRef.current) {
+        clearInterval(previewPollRef.current);
+      }
+    };
+  }, []);
+
+  async function handlePreviewRun() {
+    setActionLoading(true);
+    setPreviewStatus("running");
+    setError(null);
+    try {
+      const result = await triggerPreview();
+      setPreviewRunId(result.run_id);
+
+      // Start polling for preview completion
+      previewPollRef.current = setInterval(async () => {
+        try {
+          const preview = await getPreviewRun(result.run_id);
+          if (preview.status === "completed") {
+            setPreviewStatus("completed");
+            if (previewPollRef.current) {
+              clearInterval(previewPollRef.current);
+              previewPollRef.current = null;
+            }
+            // Navigate to preview results page
+            onPreviewComplete?.(result.run_id);
+          } else if (preview.status === "failed") {
+            setPreviewStatus("failed");
+            setError(preview.error_message ?? "Preview run failed");
+            if (previewPollRef.current) {
+              clearInterval(previewPollRef.current);
+              previewPollRef.current = null;
+            }
+          }
+        } catch {
+          // Polling error — keep trying
+        }
+      }, 3000);
+    } catch (e) {
+      setPreviewStatus("failed");
+      setError(e instanceof ApiError ? e.message : "Failed to start preview");
     } finally {
       setActionLoading(false);
     }
@@ -182,6 +280,13 @@ export function Dashboard(): React.JSX.Element {
               Run Now
             </button>
             <button
+              onClick={handlePreviewRun}
+              disabled={actionLoading || previewStatus === "running"}
+              className="px-3 py-1.5 text-xs font-medium text-white bg-purple-600 rounded-lg hover:bg-purple-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+            >
+              {previewStatus === "running" ? "Preview Running…" : "Preview Run"}
+            </button>
+            <button
               onClick={handleTogglePause}
               disabled={actionLoading}
               className="px-3 py-1.5 text-xs font-medium text-gray-700 bg-gray-100 rounded-lg hover:bg-gray-200 disabled:opacity-50 transition-colors"
@@ -191,6 +296,50 @@ export function Dashboard(): React.JSX.Element {
           </div>
         </div>
       </div>
+
+      {/* Preview status indicator */}
+      {previewStatus !== "idle" && (
+        <div className={`rounded-xl border p-3 shadow-sm flex items-center gap-3 ${
+          previewStatus === "running"
+            ? "bg-purple-50 border-purple-200"
+            : previewStatus === "completed"
+            ? "bg-green-50 border-green-200"
+            : "bg-red-50 border-red-200"
+        }`}>
+          {previewStatus === "running" && (
+            <svg className="w-4 h-4 text-purple-600 animate-spin" fill="none" viewBox="0 0 24 24">
+              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+            </svg>
+          )}
+          {previewStatus === "completed" && (
+            <span className="w-4 h-4 text-green-600">✓</span>
+          )}
+          {previewStatus === "failed" && (
+            <span className="w-4 h-4 text-red-600">✗</span>
+          )}
+          <span className={`text-xs font-medium ${
+            previewStatus === "running"
+              ? "text-purple-700"
+              : previewStatus === "completed"
+              ? "text-green-700"
+              : "text-red-700"
+          }`}>
+            {previewStatus === "running" && "Preview run in progress — discovering and scoring jobs…"}
+            {previewStatus === "completed" && "Preview run completed — viewing results…"}
+            {previewStatus === "failed" && "Preview run failed"}
+          </span>
+          {previewStatus !== "running" && (
+            <button
+              onClick={() => setPreviewStatus("idle")}
+              className="ml-auto text-xs text-gray-400 hover:text-gray-600"
+              aria-label="Dismiss"
+            >
+              ✕
+            </button>
+          )}
+        </div>
+      )}
 
       {/* Stats grid */}
       <div className="grid grid-cols-2 gap-3">
@@ -219,6 +368,62 @@ export function Dashboard(): React.JSX.Element {
               {h.label}
             </span>
           ))}
+        </div>
+      </div>
+
+      {/* Session Health & Chrome Status */}
+      <div className="bg-white rounded-xl border border-gray-200 p-4 shadow-sm">
+        <p className="text-xs text-gray-500 mb-3">Session Health</p>
+        <div className="flex flex-wrap gap-2 mb-3">
+          {/* Chrome CDP Status */}
+          <span
+            className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium ${
+              chromeStatus?.connected
+                ? "bg-green-50 text-green-700"
+                : "bg-red-50 text-red-700"
+            }`}
+          >
+            <span className={`w-1.5 h-1.5 rounded-full ${chromeStatus?.connected ? "bg-green-500" : "bg-red-500"}`} />
+            {chromeStatus?.connected ? "Chrome Connected" : "Chrome Not Connected"}
+          </span>
+
+          {/* LinkedIn Session Status */}
+          <span
+            className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium ${
+              sessionHealth?.linkedin_authenticated
+                ? "bg-green-50 text-green-700"
+                : "bg-gray-100 text-gray-600"
+            }`}
+          >
+            <span className={`w-1.5 h-1.5 rounded-full ${sessionHealth?.linkedin_authenticated ? "bg-green-500" : "bg-gray-400"}`} />
+            {sessionHealth?.linkedin_authenticated ? "LinkedIn Authenticated" : "LinkedIn Unknown"}
+          </span>
+        </div>
+
+        {/* Error message from last health check */}
+        {sessionHealth?.error_message && (
+          <p className="text-xs text-red-600 mb-3">{sessionHealth.error_message}</p>
+        )}
+
+        <div className="flex gap-2">
+          <button
+            onClick={handleCheckSessionHealth}
+            disabled={healthCheckLoading}
+            className="px-3 py-1.5 text-xs font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+          >
+            {healthCheckLoading ? "Checking…" : "Check Session Health"}
+          </button>
+
+          {/* Show Launch Chrome button only when Chrome is not connected */}
+          {!chromeStatus?.connected && (
+            <button
+              onClick={handleLaunchChrome}
+              disabled={chromeLaunchLoading}
+              className="px-3 py-1.5 text-xs font-medium text-gray-700 bg-gray-100 rounded-lg hover:bg-gray-200 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+            >
+              {chromeLaunchLoading ? "Launching…" : "Launch Chrome for Automation"}
+            </button>
+          )}
         </div>
       </div>
 

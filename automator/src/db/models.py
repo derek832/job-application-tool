@@ -401,3 +401,197 @@ class ExternalApplyLog(Base):
         Index("idx_external_apply_log_job_id", "job_id"),
         Index("idx_external_apply_log_method", "method"),
     )
+
+
+# ---------------------------------------------------------------------------
+# PreviewRun (Wave 3 — Pipeline Intelligence)
+# ---------------------------------------------------------------------------
+
+
+class PreviewRun(Base):
+    """A preview/dry-run pipeline execution record.
+
+    Maps to the ``preview_runs`` table. Preview mode executes discovery and
+    scoring stages without proceeding to tailoring or application. Each run
+    tracks aggregate counts and completion status.
+
+    Attributes:
+        id: UUID string primary key.
+        status: Current run status — 'running', 'completed', or 'failed'.
+        started_at: ISO 8601 timestamp when the preview run began.
+        completed_at: ISO 8601 timestamp when the run finished (nullable).
+        error_message: Error details if the run failed (nullable).
+        total_discovered: Number of jobs discovered during the run.
+        total_scored: Number of jobs that were scored.
+        total_blacklisted: Number of jobs filtered by the blacklist.
+    """
+
+    __tablename__ = "preview_runs"
+
+    id: Mapped[str] = mapped_column(Text, primary_key=True)
+    status: Mapped[str] = mapped_column(Text, nullable=False, default="running")
+    started_at: Mapped[str] = mapped_column(Text, nullable=False)
+    completed_at: Mapped[str | None] = mapped_column(Text, nullable=True)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    total_discovered: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    total_scored: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    total_blacklisted: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+    # Relationships
+    preview_jobs: Mapped[list[PreviewJob]] = relationship(
+        "PreviewJob",
+        back_populates="preview_run",
+        cascade="all, delete-orphan",
+        lazy="select",
+    )
+
+    __table_args__ = (Index("idx_preview_runs_started_at", "started_at"),)
+
+    def __repr__(self) -> str:
+        return (
+            f"<PreviewRun id={self.id!r} status={self.status!r} "
+            f"discovered={self.total_discovered}>"
+        )
+
+
+# ---------------------------------------------------------------------------
+# PreviewJob (Wave 3 — Pipeline Intelligence)
+# ---------------------------------------------------------------------------
+
+
+class PreviewJob(Base):
+    """A job discovered and scored during a preview run.
+
+    Maps to the ``preview_jobs`` table. Each record represents a single job
+    found during a preview run, with its fit score and the projected action
+    that would be taken in a full pipeline run.
+
+    Attributes:
+        id: Auto-incrementing surrogate primary key.
+        run_id: Foreign key referencing ``preview_runs.id``.
+        job_id: LinkedIn job ID string.
+        job_title: Title of the job posting.
+        company: Name of the hiring company.
+        linkedin_url: Canonical LinkedIn URL for the job listing.
+        fit_score: Claude-assigned fit score 0–100; NULL if blacklisted.
+        fit_rationale: Claude's explanation of the score (nullable).
+        projected_action: What would happen in a full run —
+            'auto_apply', 'stretch_queue', 'skip', or 'blacklisted'.
+        promoted: Whether this job was promoted to the real pipeline (0 or 1).
+        promoted_at: ISO 8601 timestamp when promoted (NULL until promoted).
+    """
+
+    __tablename__ = "preview_jobs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    run_id: Mapped[str] = mapped_column(
+        Text, ForeignKey("preview_runs.id", ondelete="CASCADE"), nullable=False
+    )
+    job_id: Mapped[str] = mapped_column(Text, nullable=False)
+    job_title: Mapped[str] = mapped_column(Text, nullable=False)
+    company: Mapped[str] = mapped_column(Text, nullable=False)
+    linkedin_url: Mapped[str] = mapped_column(Text, nullable=False)
+    fit_score: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    fit_rationale: Mapped[str | None] = mapped_column(Text, nullable=True)
+    projected_action: Mapped[str] = mapped_column(Text, nullable=False)
+    promoted: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    promoted_at: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    # Relationship
+    preview_run: Mapped[PreviewRun] = relationship(
+        "PreviewRun", back_populates="preview_jobs"
+    )
+
+    __table_args__ = (
+        Index("idx_preview_jobs_run_id", "run_id"),
+        Index("idx_preview_jobs_job_id", "job_id"),
+    )
+
+    def __repr__(self) -> str:
+        return (
+            f"<PreviewJob id={self.id} job_id={self.job_id!r} "
+            f"action={self.projected_action!r} score={self.fit_score}>"
+        )
+
+
+# ---------------------------------------------------------------------------
+# BlacklistEntry (Wave 3 — Pipeline Intelligence)
+# ---------------------------------------------------------------------------
+
+
+class BlacklistEntry(Base):
+    """A company or title pattern blacklist entry.
+
+    Maps to the ``blacklist_entries`` table. Blacklisted companies are matched
+    case-insensitively by exact name; title patterns are matched as
+    case-insensitive substrings. The hit_count tracks how many jobs have been
+    filtered by each entry.
+
+    Attributes:
+        id: Auto-incrementing surrogate primary key.
+        entry_type: Either 'company' or 'title_pattern'.
+        value: The blacklist string (company name or title pattern).
+        created_at: ISO 8601 timestamp when the entry was created.
+        hit_count: Number of jobs filtered by this entry.
+    """
+
+    __tablename__ = "blacklist_entries"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    entry_type: Mapped[str] = mapped_column(Text, nullable=False)
+    value: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[str] = mapped_column(Text, nullable=False)
+    hit_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+    __table_args__ = (
+        Index("idx_blacklist_entries_type", "entry_type"),
+        UniqueConstraint("entry_type", "value", name="idx_blacklist_entries_unique"),
+    )
+
+    def __repr__(self) -> str:
+        return (
+            f"<BlacklistEntry id={self.id} type={self.entry_type!r} "
+            f"value={self.value!r} hits={self.hit_count}>"
+        )
+
+
+# ---------------------------------------------------------------------------
+# NotificationQueue (Wave 3 — Pipeline Intelligence)
+# ---------------------------------------------------------------------------
+
+
+class NotificationQueue(Base):
+    """A queued notification for delivery after quiet hours end.
+
+    Maps to the ``notification_queue`` table. During quiet hours, notifications
+    are stored here instead of being delivered immediately. When quiet hours
+    end, all pending items are composed into a batch summary and delivered.
+
+    Attributes:
+        id: Auto-incrementing surrogate primary key.
+        job_id: Foreign key referencing ``job_records.id``; nullable because
+            some notifications are not tied to a specific job.
+        trigger_reason: The condition that caused this notification.
+        message_body: The notification text content.
+        queued_at: ISO 8601 timestamp when the notification was queued.
+        delivered: Whether the notification has been delivered (0 or 1).
+    """
+
+    __tablename__ = "notification_queue"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    job_id: Mapped[str | None] = mapped_column(
+        Text, ForeignKey("job_records.id", ondelete="SET NULL"), nullable=True
+    )
+    trigger_reason: Mapped[str] = mapped_column(Text, nullable=False)
+    message_body: Mapped[str] = mapped_column(Text, nullable=False)
+    queued_at: Mapped[str] = mapped_column(Text, nullable=False)
+    delivered: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+    __table_args__ = (Index("idx_notification_queue_delivered", "delivered"),)
+
+    def __repr__(self) -> str:
+        return (
+            f"<NotificationQueue id={self.id} reason={self.trigger_reason!r} "
+            f"delivered={self.delivered}>"
+        )

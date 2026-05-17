@@ -543,3 +543,149 @@ class TestAuthDependency:
                 json={"ntfy_enabled": True, "ntfy_server_url": "https://ntfy.sh"},
             )
             assert put_resp.status_code in (401, 403)
+
+
+# ---------------------------------------------------------------------------
+# Blacklist Config tests
+# ---------------------------------------------------------------------------
+
+
+class TestBlacklistConfig:
+    """Tests for blacklist configuration endpoints."""
+
+    @pytest.mark.asyncio
+    async def test_get_returns_empty_when_no_entries(self, client: AsyncClient) -> None:
+        """GET /config/blacklist returns empty lists when no entries exist."""
+        resp = await client.get("/config/blacklist")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["companies"] == []
+        assert data["title_patterns"] == []
+
+    @pytest.mark.asyncio
+    async def test_put_replaces_blacklist_entirely(self, client: AsyncClient) -> None:
+        """PUT /config/blacklist replaces all entries."""
+        payload = {
+            "companies": ["Revature", "Infosys"],
+            "title_patterns": ["intern", "entry level"],
+        }
+        resp = await client.put("/config/blacklist", json=payload)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert len(data["companies"]) == 2
+        assert len(data["title_patterns"]) == 2
+        assert data["companies"][0]["value"] == "Revature"
+        assert data["companies"][0]["hit_count"] == 0
+        assert data["title_patterns"][1]["value"] == "entry level"
+
+    @pytest.mark.asyncio
+    async def test_put_clears_existing_entries(self, client: AsyncClient) -> None:
+        """PUT /config/blacklist clears old entries before adding new ones."""
+        # First PUT
+        await client.put(
+            "/config/blacklist",
+            json={"companies": ["OldCo"], "title_patterns": ["old pattern"]},
+        )
+        # Second PUT replaces entirely
+        resp = await client.put(
+            "/config/blacklist",
+            json={"companies": ["NewCo"], "title_patterns": []},
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert len(data["companies"]) == 1
+        assert data["companies"][0]["value"] == "NewCo"
+        assert data["title_patterns"] == []
+
+        # Verify via GET
+        get_resp = await client.get("/config/blacklist")
+        get_data = get_resp.json()
+        assert len(get_data["companies"]) == 1
+        assert get_data["companies"][0]["value"] == "NewCo"
+        assert get_data["title_patterns"] == []
+
+    @pytest.mark.asyncio
+    async def test_post_company_adds_entry(self, client: AsyncClient) -> None:
+        """POST /config/blacklist/companies adds a new company entry."""
+        resp = await client.post("/config/blacklist/companies", json={"value": "Wipro"})
+        assert resp.status_code == 201
+        data = resp.json()
+        assert data["value"] == "Wipro"
+        assert data["hit_count"] == 0
+
+    @pytest.mark.asyncio
+    async def test_post_company_rejects_duplicate(self, client: AsyncClient) -> None:
+        """POST /config/blacklist/companies returns 409 for duplicate entry."""
+        await client.post("/config/blacklist/companies", json={"value": "Revature"})
+        resp = await client.post("/config/blacklist/companies", json={"value": "revature"})
+        assert resp.status_code == 409
+
+    @pytest.mark.asyncio
+    async def test_delete_company_removes_entry(self, client: AsyncClient) -> None:
+        """DELETE /config/blacklist/companies/{entry} removes the entry."""
+        await client.post("/config/blacklist/companies", json={"value": "Infosys"})
+        resp = await client.delete("/config/blacklist/companies/Infosys")
+        assert resp.status_code == 200
+
+        # Verify it's gone
+        get_resp = await client.get("/config/blacklist")
+        data = get_resp.json()
+        assert all(c["value"] != "Infosys" for c in data["companies"])
+
+    @pytest.mark.asyncio
+    async def test_delete_company_returns_404_for_missing(self, client: AsyncClient) -> None:
+        """DELETE /config/blacklist/companies/{entry} returns 404 if not found."""
+        resp = await client.delete("/config/blacklist/companies/NonExistent")
+        assert resp.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_post_title_adds_entry(self, client: AsyncClient) -> None:
+        """POST /config/blacklist/titles adds a new title pattern entry."""
+        resp = await client.post("/config/blacklist/titles", json={"value": "intern"})
+        assert resp.status_code == 201
+        data = resp.json()
+        assert data["value"] == "intern"
+        assert data["hit_count"] == 0
+
+    @pytest.mark.asyncio
+    async def test_post_title_rejects_duplicate(self, client: AsyncClient) -> None:
+        """POST /config/blacklist/titles returns 409 for duplicate entry."""
+        await client.post("/config/blacklist/titles", json={"value": "junior"})
+        resp = await client.post("/config/blacklist/titles", json={"value": "Junior"})
+        assert resp.status_code == 409
+
+    @pytest.mark.asyncio
+    async def test_delete_title_removes_entry(self, client: AsyncClient) -> None:
+        """DELETE /config/blacklist/titles/{entry} removes the entry."""
+        await client.post("/config/blacklist/titles", json={"value": "part-time"})
+        resp = await client.delete("/config/blacklist/titles/part-time")
+        assert resp.status_code == 200
+
+        # Verify it's gone
+        get_resp = await client.get("/config/blacklist")
+        data = get_resp.json()
+        assert all(t["value"] != "part-time" for t in data["title_patterns"])
+
+    @pytest.mark.asyncio
+    async def test_delete_title_returns_404_for_missing(self, client: AsyncClient) -> None:
+        """DELETE /config/blacklist/titles/{entry} returns 404 if not found."""
+        resp = await client.delete("/config/blacklist/titles/nonexistent")
+        assert resp.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_get_returns_hit_counts(self, client: AsyncClient, db_session: AsyncSession) -> None:
+        """GET /config/blacklist returns hit counts for each entry."""
+        from src.db.blacklist_repo import add_entry as repo_add_entry, increment_hit_count
+
+        # Add entries directly via repo and increment hit counts
+        entry = await repo_add_entry(db_session, "company", "TestCo")
+        await increment_hit_count(db_session, entry.id)
+        await increment_hit_count(db_session, entry.id)
+        await db_session.commit()
+
+        resp = await client.get("/config/blacklist")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert len(data["companies"]) == 1
+        assert data["companies"][0]["value"] == "TestCo"
+        assert data["companies"][0]["hit_count"] == 2
