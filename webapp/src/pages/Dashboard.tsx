@@ -166,7 +166,7 @@ export function Dashboard({ onPreviewComplete }: DashboardProps): React.JSX.Elem
   async function handleLaunchChrome() {
     // Chrome runs on the host, not inside Docker. Point users to the batch file.
     try {
-      await navigator.clipboard.writeText("launch-chrome.bat");
+      await navigator.clipboard.writeText("start-chrome-debug.bat");
       setChromeCopied(true);
       setTimeout(() => setChromeCopied(false), 3000);
     } catch {
@@ -417,9 +417,9 @@ export function Dashboard({ onPreviewComplete }: DashboardProps): React.JSX.Elem
             <button
               onClick={handleLaunchChrome}
               className="px-3 py-1.5 text-xs font-medium text-gray-700 bg-gray-100 rounded-lg hover:bg-gray-200 transition-colors"
-              title="Double-click launch-chrome.bat in the project root"
+              title="Double-click start-chrome-debug.bat in the project root"
             >
-              {chromeCopied ? "✓ Run launch-chrome.bat" : "How to Launch Chrome"}
+              {chromeCopied ? "✓ Run start-chrome-debug.bat" : "How to Launch Chrome"}
             </button>
           )}
         </div>
