@@ -1,5 +1,5 @@
-import { useState, useEffect } from "react";
-import { getSettings, updateSettings, ApiError } from "../api/client";
+import { useState, useEffect, useRef, useCallback } from "react";
+import { getSettings, updateSettings, detectLanIp, ApiError } from "../api/client";
 import type { Settings as SettingsType } from "../api/client";
 
 export function Settings(): React.JSX.Element {
@@ -20,6 +20,50 @@ export function Settings(): React.JSX.Element {
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
 
+  // LAN IP detection state
+  const [lanIp, setLanIp] = useState("");
+  const [detectLoading, setDetectLoading] = useState(false);
+  const [detectError, setDetectError] = useState<string | null>(null);
+  const detectErrorTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const clearDetectError = useCallback(() => {
+    setDetectError(null);
+    if (detectErrorTimerRef.current) {
+      clearTimeout(detectErrorTimerRef.current);
+      detectErrorTimerRef.current = null;
+    }
+  }, []);
+
+  async function handleDetectLanIp() {
+    clearDetectError();
+    setDetectLoading(true);
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 10_000);
+
+    try {
+      const result = await detectLanIp(controller.signal);
+      setLanIp(result.lan_base_url);
+    } catch (e) {
+      let message: string;
+      if (e instanceof DOMException && e.name === "AbortError") {
+        message = "Detection timed out. Please try again or enter your LAN IP manually.";
+      } else if (e instanceof ApiError) {
+        message = e.detail || e.message;
+      } else {
+        message = "Detection failed. Please try again or enter your LAN IP manually.";
+      }
+      setDetectError(message);
+      detectErrorTimerRef.current = setTimeout(() => {
+        setDetectError(null);
+        detectErrorTimerRef.current = null;
+      }, 8_000);
+    } finally {
+      clearTimeout(timeoutId);
+      setDetectLoading(false);
+    }
+  }
+
   useEffect(() => {
     async function load() {
       try {
@@ -32,6 +76,15 @@ export function Settings(): React.JSX.Element {
       }
     }
     load();
+  }, []);
+
+  // Cleanup detect error timer on unmount
+  useEffect(() => {
+    return () => {
+      if (detectErrorTimerRef.current) {
+        clearTimeout(detectErrorTimerRef.current);
+      }
+    };
   }, []);
 
   async function handleSave(e: React.FormEvent) {
@@ -221,6 +274,62 @@ export function Settings(): React.JSX.Element {
           {saving ? "Saving..." : success ? "✓ Saved" : "Save Settings"}
         </button>
       </form>
+
+      {/* Ntfy Configuration Section */}
+      <div className="border-t border-gray-200 pt-5">
+        <h3 className="text-sm font-semibold text-gray-900 mb-3">Ntfy Notification Settings</h3>
+
+        <div>
+          <label className="block text-xs font-medium text-gray-600 mb-1.5">
+            LAN IP / Hostname
+          </label>
+          <div className="flex gap-2">
+            <input
+              type="text"
+              value={lanIp}
+              onChange={(e) => setLanIp(e.target.value)}
+              placeholder="e.g., http://192.168.1.100:7432"
+              className="flex-1 px-3 py-2 text-sm border border-gray-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+            />
+            <button
+              type="button"
+              onClick={handleDetectLanIp}
+              disabled={detectLoading}
+              className="px-3 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 disabled:opacity-50 transition-colors inline-flex items-center gap-1.5"
+            >
+              {detectLoading && (
+                <svg
+                  className="animate-spin h-4 w-4"
+                  xmlns="http://www.w3.org/2000/svg"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                >
+                  <circle
+                    className="opacity-25"
+                    cx="12"
+                    cy="12"
+                    r="10"
+                    stroke="currentColor"
+                    strokeWidth="4"
+                  />
+                  <path
+                    className="opacity-75"
+                    fill="currentColor"
+                    d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
+                  />
+                </svg>
+              )}
+              Detect
+            </button>
+          </div>
+          {detectError && (
+            <p className="mt-1.5 text-xs text-red-600">{detectError}</p>
+          )}
+          <p className="text-xs text-gray-400 mt-1">
+            Base URL for ntfy action buttons to reach the automator over LAN.
+          </p>
+        </div>
+      </div>
     </div>
   );
 }
