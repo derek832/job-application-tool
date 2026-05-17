@@ -1,8 +1,8 @@
 ---
-inclusion: always
+inclusion: manual
 ---
 
-# Security Standards & Dependency Hygiene
+# Engineering — Security Standards & Dependency Hygiene
 
 ## Dependency Management
 
@@ -47,7 +47,7 @@ inclusion: always
 - The FastAPI server binds exclusively to `127.0.0.1`. Never `0.0.0.0`.
 - All outbound connections to external APIs (Claude, Gmail, Google) use HTTPS/TLS. Never disable certificate verification (`verify=False` is forbidden).
 - Playwright browser instances have no exposed ports. They communicate via CDP inside the Docker network only.
-- Docker Compose must not publish any ports to the host except `127.0.0.1:7432:7432`.
+- Docker Compose must not publish any ports to external network interfaces. Allowed localhost bindings: `127.0.0.1:3000:3000` (frontend/nginx) and the automator port exposed internally only within the Docker network. The LAN server (Wave 1) may additionally bind to a user-configured LAN IP for mobile queue access.
 
 ## Docker Security
 
@@ -57,7 +57,19 @@ inclusion: always
 - Do not install `curl`, `wget`, or other network tools in the production image unless required.
 - Use multi-stage Docker builds to keep the final image minimal.
 
-## Chrome Extension Security
+## Web App Security (Post Wave 0)
+
+After Wave 0, the Chrome Extension is removed and replaced by a React SPA served by nginx at `http://127.0.0.1:3000`.
+
+- The Bearer token is stored in `localStorage` under key `jat_api_token`. This is origin-scoped to `http://127.0.0.1:3000` only.
+- The token is never logged, never included in error messages, and never sent to any URL other than `/api/*` (proxied by nginx to the local automator).
+- The nginx container runs as a non-root user. The final image contains only nginx and static HTML/JS/CSS — no Node.js, npm, or source code.
+- The nginx base image uses a pinned version tag (e.g., `nginx:1.27.3-alpine`).
+- The web app requires zero browser permissions and works in any modern browser without extensions.
+
+## Chrome Extension Security (DEPRECATED — Removed after Wave 0)
+
+> **Note:** This section applies only to the pre-Wave-0 architecture where a Chrome Extension served as the UI. After Wave 0 completes and the `extension/` directory is removed, these rules no longer apply. See "Web App Security" above for the replacement guidance.
 
 - The extension's `manifest.json` must declare the minimum required permissions. Do not request `<all_urls>` — scope host permissions to `http://127.0.0.1:7432/*` and `https://www.linkedin.com/*` only.
 - The extension must not use `eval()` or `new Function()` anywhere. This is enforced by Manifest V3's CSP.
