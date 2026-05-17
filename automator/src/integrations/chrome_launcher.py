@@ -138,6 +138,7 @@ async def get_chrome_status(cdp_url: str = "http://localhost:9222") -> ChromeSta
             response = await client.get(
                 f"{cdp_url.rstrip('/')}/json/version",
                 timeout=CDP_TIMEOUT,
+                headers={"Host": "localhost"},
             )
 
         if response.status_code == 200:
