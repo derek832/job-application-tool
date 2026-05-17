@@ -3,7 +3,8 @@ FastAPI application entrypoint for the LinkedIn Job Automator.
 
 Creates the FastAPI app with a lifespan handler that initializes the database,
 generates an API token if absent, and registers the APScheduler cron jobs.
-The app binds exclusively to 127.0.0.1:7432.
+The app binds to 0.0.0.0:7432 so the LAN server accepts connections from any
+interface inside the container.
 
 Validates: Requirements 12.4, 12.5, 10.6
 """
@@ -173,7 +174,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # Register the scheduler
     setup_scheduler(app, scheduled_time)
 
-    logger.info("startup_complete", host="127.0.0.1", port=7432)
+    logger.info("startup_complete", host="0.0.0.0", port=7432)
 
     yield
 

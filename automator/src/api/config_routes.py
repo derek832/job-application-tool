@@ -6,6 +6,9 @@ user profile, system settings, and ntfy notification configuration.
 All endpoints require Bearer token authentication. The GET /config/settings
 endpoint redacts secret fields. The GET /config/ntfy endpoint omits the
 api_token for security.
+
+Includes a LAN IP auto-detection endpoint that resolves the host machine's
+LAN-routable IP address from within the Docker container.
 """
 
 from __future__ import annotations
@@ -14,10 +17,18 @@ import re
 
 import structlog
 from fastapi import APIRouter, Depends
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, field_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.api.auth import verify_token
+from src.api.lan_detect import (
+    LanDetectionError,
+    detect_lan_ip,
+    format_base_url,
+    is_ipv4,
+    validate_lan_ip,
+)
 from src.api.schemas import (
     GoalsProfile,
     GoalsProfileUpdate,
@@ -34,6 +45,74 @@ from src.db.database import get_session
 logger = structlog.get_logger(__name__)
 
 router = APIRouter(prefix="/config", dependencies=[Depends(verify_token)])
+
+
+# ---------------------------------------------------------------------------
+# Pydantic models for LAN detection
+# ---------------------------------------------------------------------------
+
+
+class LanDetectResponse(BaseModel):
+    """Successful LAN detection response."""
+
+    lan_base_url: str  # e.g., "http://192.168.1.100:7432"
+    port: int  # Always 7432
+
+
+class LanDetectError(BaseModel):
+    """Error response when detection fails."""
+
+    error: str  # Human-readable error message
+
+
+# ---------------------------------------------------------------------------
+# LAN Detection
+# ---------------------------------------------------------------------------
+
+LAN_PORT = 7432
+
+
+@router.get("/lan-detect")
+async def get_lan_detect() -> LanDetectResponse:
+    """Detect the host machine's LAN IP address.
+
+    Resolves the LAN-routable IP via the LAN_IP environment variable
+    (if set) or DNS resolution of host.docker.internal. Validates that
+    the resolved address is a private IPv4 address suitable for LAN use.
+
+    Non-IPv4 values (hostnames) bypass validation and are accepted as-is.
+
+    Returns:
+        LanDetectResponse with the formatted base URL and port.
+
+    Raises:
+        HTTP 503: DNS resolution failed or timed out.
+        HTTP 422: Resolved IP is not a valid LAN address.
+    """
+    try:
+        detected = await detect_lan_ip()
+    except LanDetectionError as exc:
+        logger.warning("lan_detect_failed", error=str(exc))
+        return JSONResponse(
+            status_code=503,
+            content={"error": str(exc)},
+        )
+
+    # If the detected value is an IPv4 address, validate it
+    if is_ipv4(detected):
+        error_msg = validate_lan_ip(detected)
+        if error_msg is not None:
+            logger.warning("lan_detect_invalid_ip", address=detected, error=error_msg)
+            return JSONResponse(
+                status_code=422,
+                content={"error": error_msg},
+            )
+
+    # Valid private IP or hostname — return formatted response
+    base_url = format_base_url(detected, LAN_PORT)
+    logger.info("lan_detect_success", base_url=base_url)
+    return LanDetectResponse(lan_base_url=base_url, port=LAN_PORT)
+
 
 # ---------------------------------------------------------------------------
 # Search Config
