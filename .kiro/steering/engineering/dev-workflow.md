@@ -1,10 +1,12 @@
 ---
-inclusion: always
+inclusion: manual
 ---
 
-# Development Workflow
+# Engineering — Development Workflow
 
 ## Project Structure
+
+> **Note:** Wave 0 replaces `extension/` with `webapp/`. The structure below shows the post-Wave-0 target. Until Wave 0 is complete, `extension/` still exists and `webapp/` does not.
 
 ```
 job-application-tool/
@@ -22,16 +24,18 @@ job-application-tool/
 │   ├── requirements.in         # Direct dependencies (human-edited)
 │   ├── requirements.txt        # Pinned full dependency tree (pip-compile output)
 │   └── Dockerfile
-├── extension/                  # Chrome Extension (TypeScript + React)
+├── webapp/                     # React SPA (TypeScript + Tailwind, served by nginx)
 │   ├── src/
-│   │   ├── api/                # Typed Automator API client
+│   │   ├── api/                # Typed Automator API client (relative /api/ paths)
 │   │   ├── components/         # React components
-│   │   ├── pages/              # Extension views (popup, options)
+│   │   ├── hooks/              # usePolling, useBadge, etc.
+│   │   ├── pages/              # App views (Dashboard, Queue, History, etc.)
 │   │   └── types/              # Zod schemas + inferred types
-│   ├── public/
-│   │   └── manifest.json
 │   ├── package.json
-│   └── tsconfig.json
+│   ├── tsconfig.json
+│   ├── vite.config.ts
+│   ├── nginx.conf
+│   └── Dockerfile              # Multi-stage: Node build → nginx serve
 ├── gas/                        # Google Apps Script source
 │   └── Code.gs
 ├── docker-compose.yml
@@ -47,10 +51,10 @@ job-application-tool/
 ### First-Time Setup
 
 1. Copy `.env.example` to `.env` and fill in all values.
-2. Build the automator image: `docker compose build automator`
+2. Build the stack: `docker compose build`
 3. Start the stack: `docker compose up -d`
 4. Check startup health: `docker compose logs automator --follow`
-5. Load the extension in Chrome: open `chrome://extensions`, enable Developer Mode, click "Load unpacked", select `extension/dist/`.
+5. Open `http://127.0.0.1:3000` in your browser to access the web app.
 
 ### Python (Automator) Setup for Local Development
 
@@ -68,10 +72,10 @@ To add a new dependency:
 3. Run `pip-audit --requirement requirements.txt` — fix any HIGH/CRITICAL CVEs before proceeding
 4. Run `pip-sync requirements.txt`
 
-### TypeScript (Extension) Setup
+### TypeScript (Web App) Setup
 
 ```bash
-cd extension
+cd webapp
 npm ci                          # Always use ci, not install
 npm run build                   # Production build to dist/
 npm run dev                     # Watch mode for development
@@ -94,11 +98,11 @@ To add a new dependency:
 | Run Python tests (local) | `pytest` | `automator/` |
 | Run linter | `ruff check src/` | `automator/` |
 | Run formatter check | `black --check src/` | `automator/` |
-| Build extension | `npm run build` | `extension/` |
-| Type-check extension | `npm run typecheck` | `extension/` |
-| Lint extension | `npm run lint` | `extension/` |
+| Build extension | `npm run build` | `webapp/` |
+| Type-check extension | `npm run typecheck` | `webapp/` |
+| Lint extension | `npm run lint` | `webapp/` |
 | Run CVE audit (Python) | `pip-audit --requirement requirements.txt` | `automator/` |
-| Run CVE audit (Node) | `npm audit --audit-level=moderate` | `extension/` |
+| Run CVE audit (Node) | `npm audit --audit-level=moderate` | `webapp/` |
 
 ## Git Branching Workflow
 
@@ -194,8 +198,9 @@ pytest tests/test_job_pipeline.py::test_fit_score_boundary_escalation
 
 The `docker-compose.yml` defines:
 
-- **automator** — the FastAPI service, bound to `127.0.0.1:7432`
-- **volume: app-data** — mounted at `/app/data` inside the container; holds `state.db`, PDFs, logs, and backups
+- **automator** — the FastAPI service, internal-only port (not exposed to host)
+- **frontend** — nginx serving the React SPA and proxying `/api/*` to the automator, bound to `127.0.0.1:3000`
+- **volume: app-data** — mounted at `/app/data` inside the automator container; holds `state.db`, PDFs, logs, and backups
 
 Environment variables required in `.env`:
 

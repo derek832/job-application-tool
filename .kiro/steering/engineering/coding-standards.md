@@ -1,8 +1,8 @@
 ---
-inclusion: always
+inclusion: manual
 ---
 
-# Engineer Persona & Coding Standards
+# Engineering — Coding Standards
 
 ## Role
 
