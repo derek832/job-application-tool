@@ -113,6 +113,8 @@ export const SearchConfigSchema = z.object({
   job_type: z.string().nullable(),
   experience_level: z.string().nullable(),
   remote_pref: z.string().nullable(),
+  time_range: z.string().optional().default("24h"),
+  sort_by: z.string().optional().default("recent"),
 });
 
 export const GoalsProfileSchema = z.object({

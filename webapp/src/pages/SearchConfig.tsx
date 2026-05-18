@@ -26,6 +26,18 @@ const REMOTE_PREFS = [
   { value: "on-site", label: "On-site" },
 ];
 
+const TIME_RANGES = [
+  { value: "24h", label: "Past 24 hours" },
+  { value: "week", label: "Past week" },
+  { value: "month", label: "Past month" },
+  { value: "any", label: "Any time" },
+];
+
+const SORT_OPTIONS = [
+  { value: "recent", label: "Most recent" },
+  { value: "relevant", label: "Most relevant" },
+];
+
 export function SearchConfig(): React.JSX.Element {
   const [form, setForm] = useState<SearchConfigType>({
     keywords: null,
@@ -34,6 +46,8 @@ export function SearchConfig(): React.JSX.Element {
     job_type: null,
     experience_level: null,
     remote_pref: null,
+    time_range: "24h",
+    sort_by: "recent",
   });
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -152,6 +166,30 @@ export function SearchConfig(): React.JSX.Element {
             className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
           >
             {REMOTE_PREFS.map((opt) => (
+              <option key={opt.value} value={opt.value}>{opt.label}</option>
+            ))}
+          </select>
+        </FormField>
+
+        <FormField label="Time Range">
+          <select
+            value={form.time_range ?? "24h"}
+            onChange={(e) => updateField("time_range", e.target.value)}
+            className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+          >
+            {TIME_RANGES.map((opt) => (
+              <option key={opt.value} value={opt.value}>{opt.label}</option>
+            ))}
+          </select>
+        </FormField>
+
+        <FormField label="Sort By">
+          <select
+            value={form.sort_by ?? "recent"}
+            onChange={(e) => updateField("sort_by", e.target.value)}
+            className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+          >
+            {SORT_OPTIONS.map((opt) => (
               <option key={opt.value} value={opt.value}>{opt.label}</option>
             ))}
           </select>

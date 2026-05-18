@@ -94,8 +94,22 @@ def build_search_url(config: SearchConfig) -> str:
         if mapped is not None:
             params["f_WT"] = mapped
 
-    # Always include 24-hour recency filter
-    params["f_TPR"] = "r86400"
+    # Time range filter
+    time_range_map = {
+        "24h": "r86400",
+        "week": "r604800",
+        "month": "r2592000",
+    }
+    time_range = getattr(config, "time_range", "24h") or "24h"
+    if time_range in time_range_map:
+        params["f_TPR"] = time_range_map[time_range]
+    # "any" = no f_TPR parameter
+
+    # Sort order
+    sort_by = getattr(config, "sort_by", "recent") or "recent"
+    if sort_by == "recent":
+        params["sortBy"] = "DD"
+    # "relevant" = no sortBy parameter (LinkedIn default)
 
     return f"{_LINKEDIN_SEARCH_BASE}?{urlencode(params)}"
 

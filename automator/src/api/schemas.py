@@ -32,6 +32,8 @@ class SearchConfig(BaseModel):
         job_type: Employment type filter.
         experience_level: Seniority level filter.
         remote_pref: Remote work preference filter.
+        time_range: Recency filter — "24h", "week", "month", or "any".
+        sort_by: Sort order — "recent" or "relevant".
     """
 
     model_config = ConfigDict(strict=False)
@@ -42,6 +44,8 @@ class SearchConfig(BaseModel):
     job_type: str | None = None
     experience_level: str | None = None
     remote_pref: str | None = None
+    time_range: str = "24h"
+    sort_by: str = "recent"
 
     @field_validator("search_queries", mode="before")
     @classmethod
@@ -350,6 +354,8 @@ class SearchConfigUpdate(BaseModel):
         job_type: Employment type filter.
         experience_level: Seniority level filter.
         remote_pref: Remote work preference filter.
+        time_range: Recency filter — "24h", "week", "month", or "any".
+        sort_by: Sort order — "recent" or "relevant".
     """
 
     model_config = ConfigDict(strict=False)
@@ -360,6 +366,8 @@ class SearchConfigUpdate(BaseModel):
     job_type: str | None = None
     experience_level: str | None = None
     remote_pref: str | None = None
+    time_range: str | None = None
+    sort_by: str | None = None
 
 
 class GoalsProfileUpdate(BaseModel):
