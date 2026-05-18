@@ -166,35 +166,39 @@ class TestComposeUrgentPayload:
     def test_approve_action_button_url(
         self, job_with_queue_reason: JobRecord, ntfy_settings: NtfySettings
     ) -> None:
-        """Approve button URL is {lan_base_url}/queue/{job_id}/approve."""
+        """Approve button URL is a view action with token in query params."""
         payload = compose_urgent_payload(job_with_queue_reason, "stretch_role", ntfy_settings)
         assert payload.actions is not None
         approve = payload.actions[0]
         assert approve.label == "Approve"
-        assert approve.url == "http://192.168.1.100:7432/queue/3987654321/approve"
-        assert approve.method == "POST"
-        assert approve.action == "http"
+        assert "ntfy-action" in approve.url
+        assert "action=approve" in approve.url
+        assert "job_id=3987654321" in approve.url
+        assert "token=test-token-abc123" in approve.url
+        assert approve.action == "view"
 
     def test_reject_action_button_url(
         self, job_with_queue_reason: JobRecord, ntfy_settings: NtfySettings
     ) -> None:
-        """Reject button URL is {lan_base_url}/queue/{job_id}/reject."""
+        """Reject button URL is a view action with token in query params."""
         payload = compose_urgent_payload(job_with_queue_reason, "stretch_role", ntfy_settings)
         assert payload.actions is not None
         reject = payload.actions[1]
         assert reject.label == "Reject"
-        assert reject.url == "http://192.168.1.100:7432/queue/3987654321/reject"
-        assert reject.method == "POST"
-        assert reject.action == "http"
+        assert "ntfy-action" in reject.url
+        assert "action=reject" in reject.url
+        assert "job_id=3987654321" in reject.url
+        assert "token=test-token-abc123" in reject.url
+        assert reject.action == "view"
 
-    def test_action_buttons_include_bearer_token(
+    def test_action_buttons_have_empty_headers(
         self, job_with_queue_reason: JobRecord, ntfy_settings: NtfySettings
     ) -> None:
-        """Action buttons include Authorization header with bearer token."""
+        """Action buttons have empty headers (token is in URL query param)."""
         payload = compose_urgent_payload(job_with_queue_reason, "stretch_role", ntfy_settings)
         assert payload.actions is not None
         for action in payload.actions:
-            assert action.headers == {"Authorization": "Bearer test-token-abc123"}
+            assert action.headers == {}
 
     def test_no_action_buttons_when_no_queue_reason(
         self, job_without_queue_reason: JobRecord, ntfy_settings: NtfySettings

@@ -254,42 +254,33 @@ def test_action_button_url_construction(
     assert reject_action is not None, "Missing 'Reject' action button"
 
     # Verify Approve URL construction
-    expected_approve_url = f"{lan_base_url}/queue/{job_id}/approve"
-    assert approve_action.url == expected_approve_url, (
-        f"Approve URL mismatch: expected '{expected_approve_url}', "
-        f"got '{approve_action.url}'"
+    assert "ntfy-action" in approve_action.url, (
+        f"Approve URL should contain 'ntfy-action', got '{approve_action.url}'"
     )
+    assert f"action=approve" in approve_action.url
+    assert f"job_id={job_id}" in approve_action.url
+    assert f"token={api_token}" in approve_action.url
 
     # Verify Reject URL construction
-    expected_reject_url = f"{lan_base_url}/queue/{job_id}/reject"
-    assert reject_action.url == expected_reject_url, (
-        f"Reject URL mismatch: expected '{expected_reject_url}', "
-        f"got '{reject_action.url}'"
+    assert "ntfy-action" in reject_action.url, (
+        f"Reject URL should contain 'ntfy-action', got '{reject_action.url}'"
+    )
+    assert f"action=reject" in reject_action.url
+    assert f"job_id={job_id}" in reject_action.url
+    assert f"token={api_token}" in reject_action.url
+
+    # Verify both use view action type (opens browser)
+    assert approve_action.action == "view", (
+        f"Approve action type should be 'view', got '{approve_action.action}'"
+    )
+    assert reject_action.action == "view", (
+        f"Reject action type should be 'view', got '{reject_action.action}'"
     )
 
-    # Verify both use POST method
-    assert approve_action.method == "POST", (
-        f"Approve method should be 'POST', got '{approve_action.method}'"
+    # Verify headers are empty (token is in URL query param)
+    assert approve_action.headers == {}, (
+        f"Approve headers should be empty, got '{approve_action.headers}'"
     )
-    assert reject_action.method == "POST", (
-        f"Reject method should be 'POST', got '{reject_action.method}'"
-    )
-
-    # Verify both have correct Authorization header with bearer token
-    expected_auth = f"Bearer {api_token}"
-    assert approve_action.headers.get("Authorization") == expected_auth, (
-        f"Approve Authorization header mismatch: "
-        f"expected '{expected_auth}', got '{approve_action.headers.get('Authorization')}'"
-    )
-    assert reject_action.headers.get("Authorization") == expected_auth, (
-        f"Reject Authorization header mismatch: "
-        f"expected '{expected_auth}', got '{reject_action.headers.get('Authorization')}'"
-    )
-
-    # Verify action type is "http"
-    assert approve_action.action == "http", (
-        f"Approve action type should be 'http', got '{approve_action.action}'"
-    )
-    assert reject_action.action == "http", (
-        f"Reject action type should be 'http', got '{reject_action.action}'"
+    assert reject_action.headers == {}, (
+        f"Reject headers should be empty, got '{reject_action.headers}'"
     )

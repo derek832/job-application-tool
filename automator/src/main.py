@@ -337,6 +337,117 @@ async def ntfy_confirm_via_browser(
     return HTMLResponse(content="Error", status_code=500)  # type: ignore[return-value]
 
 
+@app.get("/ntfy-action")
+async def ntfy_action_via_browser(
+    action: str | None = None,
+    job_id: str | None = None,
+    token: str | None = None,
+):
+    """Browser-accessible approve/reject endpoint for ntfy action buttons.
+
+    Validates the token from the query parameter and performs the queue
+    action (approve or reject). Returns a user-friendly HTML page.
+    """
+    from datetime import UTC, datetime
+
+    from fastapi.responses import HTMLResponse
+
+    from src.db.config_repo import get_config
+    from src.db.database import get_session
+    from src.db.job_repo import get_job_record, update_job_status
+
+    if not action or action not in ("approve", "reject"):
+        return HTMLResponse(
+            content=(
+                "<html><body style='font-family:system-ui;text-align:center;"
+                "padding:60px 20px;'>"
+                "<h1 style='color:#dc2626;'>✗ Invalid Action</h1>"
+                "<p>Missing or invalid action parameter.</p>"
+                "</body></html>"
+            ),
+            status_code=400,
+        )
+
+    if not job_id:
+        return HTMLResponse(
+            content=(
+                "<html><body style='font-family:system-ui;text-align:center;"
+                "padding:60px 20px;'>"
+                "<h1 style='color:#dc2626;'>✗ Missing Job ID</h1>"
+                "<p>No job_id provided.</p>"
+                "</body></html>"
+            ),
+            status_code=400,
+        )
+
+    async for session in get_session():
+        # Validate token
+        stored_token = await get_config(session, "api_token")
+        if not token or token != stored_token:
+            return HTMLResponse(
+                content=(
+                    "<html><body style='font-family:system-ui;text-align:center;"
+                    "padding:60px 20px;'>"
+                    "<h1 style='color:#dc2626;'>✗ Not Authorized</h1>"
+                    "<p>Invalid or missing token.</p>"
+                    "</body></html>"
+                ),
+                status_code=401,
+            )
+
+        # Find the job
+        record = await get_job_record(session, job_id)
+        if record is None:
+            return HTMLResponse(
+                content=(
+                    "<html><body style='font-family:system-ui;text-align:center;"
+                    "padding:60px 20px;'>"
+                    f"<h1 style='color:#dc2626;'>✗ Job Not Found</h1>"
+                    f"<p>No job record with ID: {job_id}</p>"
+                    "</body></html>"
+                ),
+                status_code=404,
+            )
+
+        now = datetime.now(UTC).isoformat()
+
+        if action == "approve":
+            await update_job_status(session, job_id, "approved_for_apply", reason="user_approved")
+            record.queue_reason = None
+            record.approved_at = now
+            record.updated_at = now
+            await session.commit()
+            return HTMLResponse(
+                content=(
+                    "<html><body style='font-family:system-ui;text-align:center;"
+                    "padding:60px 20px;'>"
+                    "<h1 style='color:#16a34a;'>✓ Approved</h1>"
+                    f"<p><strong>{record.job_title}</strong> @ {record.company}</p>"
+                    "<p>The job will be processed for application shortly.</p>"
+                    "</body></html>"
+                ),
+                status_code=200,
+            )
+        else:  # reject
+            await update_job_status(session, job_id, "rejected_by_user", reason="user_rejected")
+            record.queue_reason = None
+            record.updated_at = now
+            await session.commit()
+            return HTMLResponse(
+                content=(
+                    "<html><body style='font-family:system-ui;text-align:center;"
+                    "padding:60px 20px;'>"
+                    "<h1 style='color:#f59e0b;'>✗ Rejected</h1>"
+                    f"<p><strong>{record.job_title}</strong> @ {record.company}</p>"
+                    "<p>This job has been removed from the queue.</p>"
+                    "</body></html>"
+                ),
+                status_code=200,
+            )
+
+    return HTMLResponse(content="Error", status_code=500)  # type: ignore[return-value]
+
+
 if __name__ == "__main__":
     import uvicorn
 

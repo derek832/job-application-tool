@@ -39,18 +39,26 @@ def compose_urgent_payload(
     if job.queue_reason is not None and settings.lan_base_url:
         actions = [
             NtfyAction(
-                action="http",
+                action="view",
                 label="Approve",
-                url=f"{settings.lan_base_url}/queue/{job.id}/approve",
-                method="POST",
-                headers={"Authorization": f"Bearer {settings.api_token}"},
+                url=(
+                    f"{settings.lan_base_url}/ntfy-action"
+                    f"?action=approve&job_id={job.id}"
+                    f"&token={settings.api_token}"
+                ),
+                method="",
+                headers={},
             ),
             NtfyAction(
-                action="http",
+                action="view",
                 label="Reject",
-                url=f"{settings.lan_base_url}/queue/{job.id}/reject",
-                method="POST",
-                headers={"Authorization": f"Bearer {settings.api_token}"},
+                url=(
+                    f"{settings.lan_base_url}/ntfy-action"
+                    f"?action=reject&job_id={job.id}"
+                    f"&token={settings.api_token}"
+                ),
+                method="",
+                headers={},
             ),
         ]
 

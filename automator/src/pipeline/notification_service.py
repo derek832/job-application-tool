@@ -264,18 +264,26 @@ async def _send_via_ntfy(
     if job_record.queue_reason is not None and settings.ntfy.lan_base_url:
         actions = [
             NtfyAction(
-                action="http",
+                action="view",
                 label="Approve",
-                url=f"{settings.ntfy.lan_base_url}/queue/{job_record.id}/approve",
-                method="POST",
-                headers={"Authorization": f"Bearer {settings.ntfy.api_token}"},
+                url=(
+                    f"{settings.ntfy.lan_base_url}/ntfy-action"
+                    f"?action=approve&job_id={job_record.id}"
+                    f"&token={settings.ntfy.api_token}"
+                ),
+                method="",
+                headers={},
             ),
             NtfyAction(
-                action="http",
+                action="view",
                 label="Reject",
-                url=f"{settings.ntfy.lan_base_url}/queue/{job_record.id}/reject",
-                method="POST",
-                headers={"Authorization": f"Bearer {settings.ntfy.api_token}"},
+                url=(
+                    f"{settings.ntfy.lan_base_url}/ntfy-action"
+                    f"?action=reject&job_id={job_record.id}"
+                    f"&token={settings.ntfy.api_token}"
+                ),
+                method="",
+                headers={},
             ),
         ]
 
