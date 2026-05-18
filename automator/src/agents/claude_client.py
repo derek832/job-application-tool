@@ -100,7 +100,12 @@ class ClaudeClient:
             ScoringError: If the API call fails after all retries or response
                 validation fails.
         """
-        system_prompt = "You are an expert recruiter and career coach. Analyze job fit objectively."
+        system_prompt = (
+            "You are an expert technical recruiter scoring job fit. "
+            "You score using a weighted rubric and use the FULL 0-100 range. "
+            "Most jobs should score either above 70 (strong fit) or below 40 (poor fit). "
+            "Scores of 45-65 should be rare and reserved for genuinely ambiguous cases."
+        )
         user_prompt = (
             "## Job Description\n"
             f"{description}\n\n"
@@ -108,16 +113,38 @@ class ClaudeClient:
             f"{resume}\n\n"
             "## Career Goals\n"
             f"{goals}\n\n"
-            "Score this job's fit for the candidate on a scale of 0-100.\n\n"
-            "For deal_breaker_found: only set to true if the JOB ITSELF requires or "
-            "is at a level matching a deal-breaker term. For example, if 'Associate' is "
-            "a deal-breaker, only flag it if the role IS an associate-level position, "
-            "NOT if the word 'associate' appears in other contexts like 'associate with "
-            "teams' or 'Associate's degree preferred'.\n\n"
-            "Respond with ONLY valid JSON (no markdown, no explanation) matching this schema:\n"
+            "## Scoring Rubric\n"
+            "Score each dimension independently, then sum for the total fit_score.\n\n"
+            "1. **Skills Match (0-35)**: Does this role use the candidate's actual "
+            "technical skills, tools, and methodologies? Score 30-35 if core skills "
+            "are a direct match. Score 15-25 if there's partial overlap. Score 0-10 "
+            "if the required skills are in a different domain entirely.\n\n"
+            "2. **Seniority/Level Fit (0-25)**: Is this the right career level? "
+            "Score 20-25 if the years of experience and responsibility level match. "
+            "Score 10-15 if slightly above or below. Score 0-5 if it requires "
+            "15+ years, C-suite, or is entry-level.\n\n"
+            "3. **Compensation Signals (0-20)**: Does the listed salary (if any) "
+            "meet the candidate's minimum? Are there senior-level comp indicators "
+            "(equity, bonus, band level)? Score 15-20 if comp looks right or isn't "
+            "listed (benefit of the doubt). Score 5-10 if it seems low. Score 0 if "
+            "salary is explicitly below minimum.\n\n"
+            "4. **Role Substance (0-10)**: Is this a real hands-on technical/operational "
+            "role? Score 8-10 for IC or hands-on leadership. Score 3-5 for consulting, "
+            "sales engineering, or mostly-meetings roles. Score 0-2 for pure sales, "
+            "recruiting, or compliance paperwork.\n\n"
+            "5. **Logistics (0-10)**: Any hard blockers? Score 10 if US-based remote "
+            "(any timezone PST-EST is fine). Deduct for: active security clearance "
+            "required (-10), significant travel required (-5), non-US location (-10).\n\n"
+            "## Deal-Breaker Rules\n"
+            "Set deal_breaker_found=true ONLY if the job itself requires something "
+            "listed in the candidate's deal-breakers. Only flag it if the role IS that "
+            "thing (e.g., if 'Associate' is a deal-breaker, only flag if the role IS "
+            "associate-level, NOT if the word appears in other contexts).\n\n"
+            "## Response Format\n"
+            "Respond with ONLY valid JSON (no markdown, no explanation):\n"
             "{\n"
-            '  "fit_score": <integer 0-100>,\n'
-            '  "rationale": "<string, max 200 words>",\n'
+            '  "fit_score": <integer 0-100, sum of all dimensions>,\n'
+            '  "rationale": "<string, max 200 words, mention each dimension score>",\n'
             '  "deal_breaker_found": <boolean>,\n'
             '  "deal_breaker_term": "<string or null>"\n'
             "}"
