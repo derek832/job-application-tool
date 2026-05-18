@@ -535,6 +535,7 @@ async def _run_discovery(
     """
     pw = await async_playwright().start()
     browser_context: BrowserContext | None = None
+    page = None
 
     try:
         # Connect to Chrome via CDP
@@ -583,12 +584,10 @@ async def _run_discovery(
         return discovered
 
     finally:
-        # Close the page we created but not the browser (it's the user's Chrome)
-        if browser_context:
+        # Close only the page we created (not the browser — it's the user's Chrome)
+        if browser_context and page:
             try:
-                pages = browser_context.pages
-                for p in pages:
-                    await p.close()
+                await page.close()
             except Exception as exc:
                 logger.error("preview_page_close_error", error=str(exc))
         try:
@@ -631,7 +630,9 @@ async def _connect_to_chrome(pw, cdp_url: str):
     # Strategy 2: Fresh discovery from /json/version
     try:
         async with httpx.AsyncClient() as client:
-            resp = await client.get(f"{cdp_url}/json/version", timeout=5.0, headers={"Host": "localhost"})
+            resp = await client.get(
+                f"{cdp_url}/json/version", timeout=5.0, headers={"Host": "localhost"}
+            )
             if resp.status_code == 200:
                 data = resp.json()
                 ws_url = data.get("webSocketDebuggerUrl", "")
