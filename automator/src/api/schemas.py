@@ -44,7 +44,7 @@ class SearchConfig(BaseModel):
     job_type: str | None = None
     experience_level: str | None = None
     remote_pref: str | None = None
-    time_range: str = "24h"
+    time_range: str = "2"
     sort_by: str = "recent"
 
     @field_validator("search_queries", mode="before")

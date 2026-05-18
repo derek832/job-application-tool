@@ -94,16 +94,18 @@ def build_search_url(config: SearchConfig) -> str:
         if mapped is not None:
             params["f_WT"] = mapped
 
-    # Time range filter
-    time_range_map = {
-        "24h": "r86400",
-        "week": "r604800",
-        "month": "r2592000",
-    }
-    time_range = getattr(config, "time_range", "24h") or "24h"
-    if time_range in time_range_map:
-        params["f_TPR"] = time_range_map[time_range]
-    # "any" = no f_TPR parameter
+    # Time range filter — value is number of days (as string), "0" = any time
+    time_range = getattr(config, "time_range", "2") or "2"
+    # Support legacy string values and new numeric days
+    legacy_map = {"24h": "1", "48h": "2", "week": "7", "month": "30", "any": "0"}
+    time_range = legacy_map.get(time_range, time_range)
+    try:
+        days = int(time_range)
+    except ValueError:
+        days = 2  # Default to 2 days
+    if days > 0:
+        params["f_TPR"] = f"r{days * 86400}"
+    # days == 0 means "any time" — no f_TPR parameter
 
     # Sort order
     sort_by = getattr(config, "sort_by", "recent") or "recent"

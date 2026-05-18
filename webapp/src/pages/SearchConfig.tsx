@@ -27,10 +27,14 @@ const REMOTE_PREFS = [
 ];
 
 const TIME_RANGES = [
-  { value: "24h", label: "Past 24 hours" },
-  { value: "week", label: "Past week" },
-  { value: "month", label: "Past month" },
-  { value: "any", label: "Any time" },
+  { value: "1", label: "1 day" },
+  { value: "2", label: "2 days" },
+  { value: "3", label: "3 days" },
+  { value: "5", label: "5 days" },
+  { value: "7", label: "7 days" },
+  { value: "14", label: "14 days" },
+  { value: "30", label: "30 days" },
+  { value: "0", label: "Any time" },
 ];
 
 const SORT_OPTIONS = [
@@ -46,7 +50,7 @@ export function SearchConfig(): React.JSX.Element {
     job_type: null,
     experience_level: null,
     remote_pref: null,
-    time_range: "24h",
+    time_range: "2",
     sort_by: "recent",
   });
   const [loading, setLoading] = useState(true);
