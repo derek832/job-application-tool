@@ -927,11 +927,11 @@ async def test_ntfy_connection(
     if lan_base_url and api_token:
         actions = [
             NtfyAction(
-                action="http",
+                action="view",
                 label="✓ Confirm Connection",
                 url=f"{lan_base_url}/config/ntfy/test/confirm?test_id={test_id}",
-                method="POST",
-                headers={"Authorization": f"Bearer {api_token}"},
+                method="",
+                headers={},
             ),
         ]
 
@@ -990,38 +990,40 @@ async def get_ntfy_test_status(
 
 
 @router.post("/ntfy/test/confirm")
+@router.get("/ntfy/test/confirm")
 async def confirm_ntfy_test(
     test_id: str | None = None,
     session: AsyncSession = Depends(get_session),
 ) -> JSONResponse:
     """Callback endpoint for the ntfy test action button.
 
-    When the user taps "Confirm Connection" on the test notification,
-    ntfy sends a POST to this endpoint. We record the confirmation so
-    the UI can detect it via polling.
-
-    This endpoint does NOT require auth — it's called by ntfy's action
-    button mechanism which includes the Bearer token in the request headers.
-    The auth is handled by the verify_token dependency on the router.
+    Accepts both GET and POST to handle both native app (POST) and
+    PWA/browser (GET) action button behavior. Records the confirmation
+    so the UI can detect it via polling.
     """
     logger.info("ntfy_test_confirm_received", test_id=test_id)
 
     data = await get_config(session, "ntfy_test_pending")
 
     if data and isinstance(data, dict):
-        # Verify test_id matches if provided
-        if test_id and data.get("test_id") != test_id:
-            return JSONResponse(
-                status_code=404,
-                content={"detail": "Test ID does not match pending test."},
-            )
-
+        # Accept any confirm — don't reject on test_id mismatch since
+        # the user may have sent multiple tests
         data["confirmed"] = True
         data["confirmed_at"] = datetime.now(UTC).isoformat()
+        if test_id:
+            data["test_id"] = test_id
         await set_config(session, "ntfy_test_pending", data)
         await session.commit()
 
-    return JSONResponse(
+    from fastapi.responses import HTMLResponse
+
+    return HTMLResponse(
+        content=(
+            "<html><body style='font-family:system-ui;text-align:center;"
+            "padding:60px 20px;'>"
+            "<h1 style='color:#16a34a;'>✓ Connection Confirmed</h1>"
+            "<p>Ntfy notifications are working. You can close this tab.</p>"
+            "</body></html>"
+        ),
         status_code=200,
-        content={"detail": "Connection confirmed."},
     )
