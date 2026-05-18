@@ -128,12 +128,15 @@ async def get_latest_preview(
     session: AsyncSession = Depends(get_session),
     _: None = Depends(verify_token),
 ):
-    """Return the most recent preview run ID and status.
+    """Return the most recent completed preview run ID and status.
 
-    Returns None (204) if no preview runs exist.
+    Returns None (204) if no completed preview runs exist.
     """
     result = await session.execute(
-        select(PreviewRun).order_by(PreviewRun.started_at.desc()).limit(1)
+        select(PreviewRun)
+        .where(PreviewRun.status == "completed")
+        .order_by(PreviewRun.started_at.desc())
+        .limit(1)
     )
     run = result.scalar_one_or_none()
     if run is None:

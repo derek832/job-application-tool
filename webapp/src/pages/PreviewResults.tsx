@@ -148,6 +148,16 @@ export function PreviewResults({ runId, onBack }: PreviewResultsProps): React.JS
           <h2 className="text-lg font-semibold text-gray-900">Preview Results</h2>
           <StatusBadge status={data.status} />
         </div>
+        {data.started_at && (
+          <span className="text-xs text-gray-400">
+            {new Date(data.started_at).toLocaleString(undefined, {
+              month: "short",
+              day: "numeric",
+              hour: "2-digit",
+              minute: "2-digit",
+            })}
+          </span>
+        )}
       </div>
 
       {/* Error banner */}
