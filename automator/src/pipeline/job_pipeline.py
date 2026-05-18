@@ -23,6 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.agents.claude_client import ClaudeClient
 from src.api.schemas import GoalsProfile, SearchConfig, Settings, UserProfile
 from src.db.config_repo import get_config, set_config
+from src.db.database import get_session
 from src.db.job_repo import TERMINAL_STATUSES, create_job_record
 from src.db.models import JobRecord
 from src.integrations.gdocs_client import GDocsClient
@@ -672,19 +673,27 @@ async def run_pipeline(session: AsyncSession | None = None) -> None:
         except Exception:
             pass
 
-    # Step 12: Generate and publish run summary
-    await _generate_and_publish_run_summary(session, notification_settings)
+        # Step 12: Always reset system state — use a fresh session to avoid
+        # issues with rolled-back transactions from the pipeline crash
+        try:
+            async for cleanup_session in get_session():
+                now_iso = datetime.now(UTC).isoformat()
+                current_state = await get_config(cleanup_session, "system_state") or {}
+                current_state["last_run_at"] = now_iso
+                if current_state.get("status") not in ("paused",):
+                    current_state["status"] = "idle"
+                await set_config(cleanup_session, "system_state", current_state)
+                await cleanup_session.commit()
+                logger.info("pipeline_state_reset_to_idle", last_run_at=now_iso)
+                break
+        except Exception as state_exc:
+            logger.error("pipeline_state_reset_failed", error=str(state_exc))
 
-    # Step 13: Update system_state.last_run_at
-    now_iso = datetime.now(UTC).isoformat()
-    current_state = await get_config(session, "system_state") or {}
-    current_state["last_run_at"] = now_iso
-    if current_state.get("status") not in ("paused", "error"):
-        current_state["status"] = "idle"
-    await set_config(session, "system_state", current_state)
-    await session.commit()
-
-    logger.info("pipeline_run_completed", last_run_at=now_iso)
+    # Step 13: Generate and publish run summary (best-effort, non-critical)
+    try:
+        await _generate_and_publish_run_summary(session, notification_settings)
+    except Exception as summary_exc:
+        logger.error("pipeline_run_summary_failed", error=str(summary_exc))
 
 
 async def _connect_to_chrome(pw, cdp_url: str):
