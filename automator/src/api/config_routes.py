@@ -929,7 +929,10 @@ async def test_ntfy_connection(
             NtfyAction(
                 action="view",
                 label="✓ Confirm Connection",
-                url=f"{lan_base_url}/config/ntfy/test/confirm?test_id={test_id}",
+                url=(
+                    f"{lan_base_url}/ntfy-confirm"
+                    f"?test_id={test_id}&token={api_token}"
+                ),
                 method="",
                 headers={},
             ),

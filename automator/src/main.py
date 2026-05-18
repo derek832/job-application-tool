@@ -276,6 +276,67 @@ app.include_router(health_router)
 app.include_router(chrome_router)
 
 
+# ---------------------------------------------------------------------------
+# Unauthenticated ntfy confirm endpoint (token validated via query param)
+# ---------------------------------------------------------------------------
+
+
+@app.get("/ntfy-confirm")
+async def ntfy_confirm_via_browser(
+    test_id: str | None = None,
+    token: str | None = None,
+):
+    """Browser-accessible confirm endpoint for ntfy test action buttons.
+
+    Validates the token from the query parameter (since browsers can't send
+    Authorization headers). Records the confirmation so the UI detects it.
+    """
+    from datetime import UTC, datetime
+
+    from fastapi.responses import HTMLResponse
+
+    from src.db.config_repo import get_config, set_config
+    from src.db.database import get_session
+
+    # Validate token
+    async for session in get_session():
+        stored_token = await get_config(session, "api_token")
+        if not token or token != stored_token:
+            return HTMLResponse(
+                content=(
+                    "<html><body style='font-family:system-ui;text-align:center;"
+                    "padding:60px 20px;'>"
+                    "<h1 style='color:#dc2626;'>✗ Not Authorized</h1>"
+                    "<p>Invalid or missing token.</p>"
+                    "</body></html>"
+                ),
+                status_code=401,
+            )
+
+        # Record confirmation
+        data = await get_config(session, "ntfy_test_pending")
+        if data and isinstance(data, dict):
+            data["confirmed"] = True
+            data["confirmed_at"] = datetime.now(UTC).isoformat()
+            if test_id:
+                data["test_id"] = test_id
+            await set_config(session, "ntfy_test_pending", data)
+            await session.commit()
+
+        return HTMLResponse(
+            content=(
+                "<html><body style='font-family:system-ui;text-align:center;"
+                "padding:60px 20px;'>"
+                "<h1 style='color:#16a34a;'>✓ Connection Confirmed</h1>"
+                "<p>Ntfy notifications are working. You can close this tab.</p>"
+                "</body></html>"
+            ),
+            status_code=200,
+        )
+    # Fallback (should never reach here)
+    return HTMLResponse(content="Error", status_code=500)  # type: ignore[return-value]
+
+
 if __name__ == "__main__":
     import uvicorn
 
