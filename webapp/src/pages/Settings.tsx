@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from "react";
-import { getSettings, updateSettings, getNtfyConfig, updateNtfyConfig, detectLanIp, getScheduleConfig, updateScheduleConfig, getScheduleNext, ApiError } from "../api/client";
+import { getSettings, updateSettings, getNtfyConfig, updateNtfyConfig, detectLanIp, getScheduleConfig, updateScheduleConfig, getScheduleNext, testNtfyConnection, getNtfyTestStatus, ApiError } from "../api/client";
 import type { Settings as SettingsType, NtfyConfigResponse, NtfyConfigUpdate, ScheduleConfigUpdate } from "../api/client";
 
 // ---------------------------------------------------------------------------
@@ -66,6 +66,12 @@ export function Settings(): React.JSX.Element {
   const [detectError, setDetectError] = useState<string | null>(null);
   const detectErrorTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  // Ntfy connection test state
+  const [ntfyTesting, setNtfyTesting] = useState(false);
+  const [ntfyTestResult, setNtfyTestResult] = useState<"idle" | "sent" | "confirmed" | "failed">("idle");
+  const [ntfyTestError, setNtfyTestError] = useState<string | null>(null);
+  const ntfyTestPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
   // Schedule configuration state
   const [scheduleForm, setScheduleForm] = useState<ScheduleConfigUpdate>({
     mode: "specific_times",
@@ -121,6 +127,56 @@ export function Settings(): React.JSX.Element {
     } finally {
       clearTimeout(timeoutId);
       setDetectLoading(false);
+    }
+  }
+
+  async function handleNtfyTest() {
+    // Clear previous state
+    setNtfyTesting(true);
+    setNtfyTestResult("idle");
+    setNtfyTestError(null);
+    if (ntfyTestPollRef.current) {
+      clearInterval(ntfyTestPollRef.current);
+      ntfyTestPollRef.current = null;
+    }
+
+    try {
+      const result = await testNtfyConnection();
+      if (result.sent) {
+        setNtfyTestResult("sent");
+        // Start polling for confirmation
+        ntfyTestPollRef.current = setInterval(async () => {
+          try {
+            const status = await getNtfyTestStatus();
+            if (status.confirmed) {
+              setNtfyTestResult("confirmed");
+              if (ntfyTestPollRef.current) {
+                clearInterval(ntfyTestPollRef.current);
+                ntfyTestPollRef.current = null;
+              }
+              setNtfyTesting(false);
+            }
+          } catch {
+            // Silently continue polling
+          }
+        }, 2000);
+        // Stop polling after 60 seconds
+        setTimeout(() => {
+          if (ntfyTestPollRef.current) {
+            clearInterval(ntfyTestPollRef.current);
+            ntfyTestPollRef.current = null;
+          }
+          setNtfyTesting(false);
+        }, 60_000);
+      } else {
+        setNtfyTestResult("failed");
+        setNtfyTestError(result.error ?? "Unknown error");
+        setNtfyTesting(false);
+      }
+    } catch (e) {
+      setNtfyTestResult("failed");
+      setNtfyTestError(e instanceof ApiError ? (e.detail || e.message) : "Failed to send test");
+      setNtfyTesting(false);
     }
   }
 
@@ -181,6 +237,9 @@ export function Settings(): React.JSX.Element {
     return () => {
       if (detectErrorTimerRef.current) {
         clearTimeout(detectErrorTimerRef.current);
+      }
+      if (ntfyTestPollRef.current) {
+        clearInterval(ntfyTestPollRef.current);
       }
     };
   }, []);
@@ -498,6 +557,73 @@ export function Settings(): React.JSX.Element {
             {savingNtfy ? "Saving..." : ntfySuccess ? "✓ Saved" : "Save Ntfy Settings"}
           </button>
         </form>
+
+        {/* Ntfy Connection Test */}
+        <div className="border-t border-gray-100 pt-4 space-y-3">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-sm font-medium text-gray-900">Test Connection</p>
+              <p className="text-xs text-gray-500 mt-0.5">
+                Sends a test notification with a confirm button. Tap it on your phone to verify.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={handleNtfyTest}
+              disabled={ntfyTesting || !ntfyForm.ntfy_enabled}
+              className="px-4 py-2 text-sm font-medium text-white bg-green-600 rounded-lg hover:bg-green-700 disabled:opacity-50 transition-colors inline-flex items-center gap-1.5"
+            >
+              {ntfyTesting && (
+                <svg
+                  className="animate-spin h-4 w-4"
+                  xmlns="http://www.w3.org/2000/svg"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                >
+                  <circle
+                    className="opacity-25"
+                    cx="12"
+                    cy="12"
+                    r="10"
+                    stroke="currentColor"
+                    strokeWidth="4"
+                  />
+                  <path
+                    className="opacity-75"
+                    fill="currentColor"
+                    d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
+                  />
+                </svg>
+              )}
+              Send Test
+            </button>
+          </div>
+
+          {/* Test result feedback */}
+          {ntfyTestResult === "sent" && (
+            <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 text-sm text-blue-700 flex items-center gap-2">
+              <svg className="animate-pulse h-4 w-4 text-blue-500" fill="currentColor" viewBox="0 0 20 20">
+                <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clipRule="evenodd" />
+              </svg>
+              Notification sent — waiting for you to tap "Confirm Connection" on your phone...
+            </div>
+          )}
+
+          {ntfyTestResult === "confirmed" && (
+            <div className="bg-green-50 border border-green-200 rounded-lg p-3 text-sm text-green-700 flex items-center gap-2">
+              <svg className="h-4 w-4 text-green-500" fill="currentColor" viewBox="0 0 20 20">
+                <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
+              </svg>
+              Connection confirmed — ntfy notifications are working correctly.
+            </div>
+          )}
+
+          {ntfyTestResult === "failed" && (
+            <div className="bg-red-50 border border-red-200 rounded-lg p-3 text-sm text-red-700">
+              Test failed: {ntfyTestError}
+            </div>
+          )}
+        </div>
       </section>
 
       {/* Schedule Configuration */}
@@ -759,19 +885,6 @@ export function Settings(): React.JSX.Element {
               placeholder="you@gmail.com"
               className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
             />
-          </FormField>
-
-          <FormField label="SMS Gateway">
-            <input
-              type="text"
-              value={form.sms_gateway ?? ""}
-              onChange={(e) => setForm((f: SettingsType) => ({ ...f, sms_gateway: e.target.value || null }))}
-              placeholder="e.g. 5551234567@tmomail.net"
-              className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-            />
-            <p className="text-xs text-gray-400 mt-1">
-              Fallback channel when ntfy is unavailable.
-            </p>
           </FormField>
 
           <FormField label="Google Docs Script URL">
