@@ -8,8 +8,8 @@ Wave 0 (Web App Migration) is **complete and deployed**. The Chrome Extension ha
 
 ## Needs Testing / Debugging
 
-- [ ] **Scoring prompt calibration** — Claude anchors on 62 for "vaguely relevant" jobs. The prompt needs scoring criteria, range guidance (what 30/60/80 mean), and spread encouragement. All stretch-role jobs scoring identical 62 is not useful differentiation.
-- [ ] **Pipeline DB commit before state reset** — The `finally` block opens a second session to reset state, which causes SQLite "database is locked" errors. The main session's transaction gets rolled back, losing all discovered/scored jobs. Fix: commit the main session's work before attempting state reset, or use WAL mode.
+- [x] **Scoring prompt calibration** — Implemented rubric-based scoring with 5 weighted dimensions (Skills 35, Seniority 25, Comp 20, Role Substance 10, Logistics 10), forced distribution constraint, and explicit range guidance.
+- [x] **Pipeline DB commit before state reset** — Fixed: main session commits before the finally block opens a second session for state reset. No more SQLite lock data loss.
 - [ ] **LinkedIn pagination not working** — `_go_to_next_page` scrolls to bottom but can't find the Next button (selector mismatch with current LinkedIn DOM). All searches stop at page 1. Need to inspect current LinkedIn pagination HTML and update selectors.
 - [ ] **Easy Apply automation** — Code is implemented (`easy_apply_stage.py`) but untested in production. Handles LinkedIn's multi-step Easy Apply modal with form filling, resume upload, cover letter, and submission confirmation.
 - [ ] **External apply edge cases** — Vision Agent works on BambooHR. Needs testing on Greenhouse, Lever, Workday, iCIMS. May need fixes for shadow DOM, custom React components, drag-and-drop file uploads.
