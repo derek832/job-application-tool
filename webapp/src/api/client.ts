@@ -523,6 +523,15 @@ export async function getPreviewRun(runId: string): Promise<PreviewRunResponse> 
   return request(`/preview/${encodeURIComponent(runId)}`, PreviewRunResponseSchema);
 }
 
+export async function getLatestPreview(): Promise<PreviewTriggerResponse | null> {
+  try {
+    return await request("/preview/latest", PreviewTriggerResponseSchema);
+  } catch (e) {
+    if (e instanceof ApiError && e.status === 204) return null;
+    throw e;
+  }
+}
+
 export async function promotePreviewJobs(runId: string, jobIds: string[]): Promise<PromoteResponse> {
   return request(
     `/preview/${encodeURIComponent(runId)}/promote`,

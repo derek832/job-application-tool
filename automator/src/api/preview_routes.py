@@ -119,6 +119,29 @@ class PromoteResponse(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# GET /preview/latest — Get the most recent preview run
+# ---------------------------------------------------------------------------
+
+
+@router.get("/latest", response_model=PreviewTriggerResponse | None)
+async def get_latest_preview(
+    session: AsyncSession = Depends(get_session),
+    _: None = Depends(verify_token),
+):
+    """Return the most recent preview run ID and status.
+
+    Returns None (204) if no preview runs exist.
+    """
+    result = await session.execute(
+        select(PreviewRun).order_by(PreviewRun.started_at.desc()).limit(1)
+    )
+    run = result.scalar_one_or_none()
+    if run is None:
+        return None
+    return PreviewTriggerResponse(run_id=run.id, status=run.status)
+
+
+# ---------------------------------------------------------------------------
 # POST /preview — Trigger a preview run
 # ---------------------------------------------------------------------------
 
