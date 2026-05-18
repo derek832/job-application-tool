@@ -135,7 +135,7 @@ class TestNtfyPublishSuccess:
         Validates: Requirements 1.1, 8.1
         """
         # Mock ntfy server to return 200
-        ntfy_route = respx.post("https://ntfy.sh/a1b2c3d4e5f6g7h8").mock(
+        ntfy_route = respx.post("https://ntfy.sh").mock(
             return_value=Response(200, json={"id": "msg123"})
         )
 
@@ -182,7 +182,7 @@ class TestNtfyPublishSuccess:
             captured_request = request
             return Response(200, json={"id": "msg456"})
 
-        respx.post("https://ntfy.sh/a1b2c3d4e5f6g7h8").mock(side_effect=capture_request)
+        respx.post("https://ntfy.sh").mock(side_effect=capture_request)
 
         await notify(session, job_record, "stretch_role", settings_both)
         await session.commit()
@@ -222,7 +222,7 @@ class TestSmsFallback:
         Validates: Requirements 1.3, 8.5
         """
         # Mock ntfy to return 500 on all attempts (triggers retry exhaustion)
-        respx.post("https://ntfy.sh/a1b2c3d4e5f6g7h8").mock(
+        respx.post("https://ntfy.sh").mock(
             return_value=Response(500, text="Internal Server Error")
         )
 
@@ -260,7 +260,7 @@ class TestSmsFallback:
 
         Validates: Requirements 1.3, 8.5
         """
-        respx.post("https://ntfy.sh/a1b2c3d4e5f6g7h8").mock(
+        respx.post("https://ntfy.sh").mock(
             return_value=Response(500, text="Server Error")
         )
 
@@ -295,7 +295,7 @@ class TestSmsFallback:
         Validates: Requirements 1.3, 8.5
         """
         # 4xx errors are not retried but should still trigger fallback
-        respx.post("https://ntfy.sh/a1b2c3d4e5f6g7h8").mock(
+        respx.post("https://ntfy.sh").mock(
             return_value=Response(403, text="Forbidden")
         )
 
@@ -359,7 +359,7 @@ class TestRateLimiting:
         await session.commit()
 
         # Mock ntfy (should NOT be called due to rate limit)
-        ntfy_route = respx.post("https://ntfy.sh/a1b2c3d4e5f6g7h8").mock(
+        ntfy_route = respx.post("https://ntfy.sh").mock(
             return_value=Response(200, json={"id": "msg789"})
         )
 
@@ -398,7 +398,7 @@ class TestRateLimiting:
         await self._insert_successful_sends(session, 9, job_record.id)
         await session.commit()
 
-        ntfy_route = respx.post("https://ntfy.sh/a1b2c3d4e5f6g7h8").mock(
+        ntfy_route = respx.post("https://ntfy.sh").mock(
             return_value=Response(200, json={"id": "msg_ok"})
         )
 
@@ -453,7 +453,7 @@ class TestRateLimiting:
             )
         await session.commit()
 
-        ntfy_route = respx.post("https://ntfy.sh/a1b2c3d4e5f6g7h8").mock(
+        ntfy_route = respx.post("https://ntfy.sh").mock(
             return_value=Response(200)
         )
 
@@ -493,7 +493,7 @@ class TestRunSummaryFlow:
         Validates: Requirements 5.1, 5.3
         """
         # Mock the info topic endpoint
-        info_route = respx.post("https://ntfy.sh/i9j0k1l2m3n4o5p6").mock(
+        info_route = respx.post("https://ntfy.sh").mock(
             return_value=Response(200, json={"id": "summary_msg"})
         )
 
@@ -559,7 +559,7 @@ class TestRunSummaryFlow:
         settings_ntfy_only: NotificationSettings,
     ) -> None:
         """Run summary includes error information when errors occurred."""
-        info_route = respx.post("https://ntfy.sh/i9j0k1l2m3n4o5p6").mock(
+        info_route = respx.post("https://ntfy.sh").mock(
             return_value=Response(200, json={"id": "err_msg"})
         )
 
@@ -594,7 +594,7 @@ class TestRunSummaryFlow:
 
         Run summaries are non-critical — no SMS fallback.
         """
-        respx.post("https://ntfy.sh/i9j0k1l2m3n4o5p6").mock(
+        respx.post("https://ntfy.sh").mock(
             return_value=Response(500, text="Server Error")
         )
 

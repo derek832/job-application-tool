@@ -26,7 +26,7 @@ from src.integrations.ntfy_client import (
 
 SERVER_URL = "https://ntfy.sh"
 TOPIC = "a1b2c3d4e5f6g7h8"
-PUBLISH_URL = f"{SERVER_URL}/{TOPIC}"
+PUBLISH_URL = SERVER_URL
 
 
 @pytest.fixture
