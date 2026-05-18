@@ -223,8 +223,16 @@ function safeReplace(body, findText, replaceWith) {
   var newFullText = before + replaceWith + after;
 
   // Set the text (this preserves formatting for unchanged portions)
+  var isUnderlineAtStart = textObj.isUnderline(startOffset);
   textObj.deleteText(startOffset, endOffset);
   textObj.insertText(startOffset, replaceWith);
+
+  // The inserted text inherits formatting from the character at startOffset.
+  // If the original text was NOT underlined, clear underline on the replacement
+  // to prevent formatting bleed from adjacent underlined text.
+  if (!isUnderlineAtStart) {
+    textObj.setUnderline(startOffset, startOffset + replaceWith.length - 1, false);
+  }
 
   // If the character BEFORE the start is not bold but start is bold,
   // the replacement is at a boundary — keep the replacement non-bold
