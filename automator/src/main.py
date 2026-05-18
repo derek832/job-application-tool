@@ -155,16 +155,26 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     if lan_base_url:
         parsed = urlparse(lan_base_url)
-        lan_ip = parsed.hostname or "0.0.0.0"
         lan_port = parsed.port or 7432
-        lan_app = create_lan_app(app)
-        await start_lan_server(lan_ip, lan_port, lan_app)
-        logger.info(
-            "lan_server_started",
-            host=lan_ip,
-            port=lan_port,
-            base_url=lan_base_url,
-        )
+        # The main app already binds to 0.0.0.0:7432 and Docker maps it to
+        # the LAN. The separate LAN server is only needed if running outside
+        # Docker on a different port. Since we're in Docker with port mapping,
+        # skip the LAN server — the main app handles LAN requests directly.
+        if lan_port != 7432:
+            lan_app = create_lan_app(app)
+            await start_lan_server("0.0.0.0", lan_port, lan_app)
+            logger.info(
+                "lan_server_started",
+                host="0.0.0.0",
+                port=lan_port,
+                base_url=lan_base_url,
+            )
+        else:
+            logger.info(
+                "lan_server_skipped_same_port",
+                reason="main app already serves on 0.0.0.0:7432 via Docker port mapping",
+                base_url=lan_base_url,
+            )
     else:
         logger.warning(
             "lan_server_skipped",
