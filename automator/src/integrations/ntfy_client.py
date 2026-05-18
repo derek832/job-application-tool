@@ -134,9 +134,10 @@ def _build_request_body(payload: NtfyPayload) -> dict:
 async def publish(payload: NtfyPayload, settings: NtfySettings) -> NtfyResult:
     """Publish a message to an ntfy topic with retry logic.
 
-    Posts a JSON payload to {server_url}/{topic}. Retries up to 3 times
-    with backoff delays of 5s, 15s, 30s on server errors (5xx) and
-    network failures. Does NOT retry on 4xx client errors.
+    Posts a JSON payload to the ntfy server root URL with the topic in the
+    body. Retries up to 3 times with backoff delays of 5s, 15s, 30s on
+    server errors (5xx) and network failures. Does NOT retry on 4xx client
+    errors.
 
     Args:
         payload: The notification payload to publish.
@@ -145,7 +146,7 @@ async def publish(payload: NtfyPayload, settings: NtfySettings) -> NtfyResult:
     Returns:
         An NtfyResult indicating success or failure.
     """
-    url = f"{settings.server_url.rstrip('/')}/{payload.topic}"
+    url = settings.server_url.rstrip("/")
     body = _build_request_body(payload)
     last_error: str | None = None
     last_status: int | None = None
