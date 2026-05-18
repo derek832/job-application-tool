@@ -278,50 +278,66 @@ function PreviewJobRow({
   selected: boolean;
   onToggle: () => void;
 }): React.JSX.Element {
+  const [expanded, setExpanded] = useState(false);
   const action = job.projected_action as ProjectedAction;
   const style = ACTION_STYLES[action] ?? ACTION_STYLES.skip;
 
   return (
-    <tr className="border-b border-gray-50 hover:bg-gray-50 transition-colors">
-      <td className="px-3 py-2.5 text-center">
-        {job.promoted ? (
-          <span className="text-green-500" title="Promoted">✓</span>
-        ) : (
-          <input
-            type="checkbox"
-            checked={selected}
-            onChange={onToggle}
-            className="w-4 h-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
-            aria-label={`Select ${job.job_title} at ${job.company}`}
-          />
-        )}
-      </td>
-      <td className="px-3 py-2.5">
-        <a
-          href={job.linkedin_url}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="text-blue-600 hover:underline font-medium"
-        >
-          {job.job_title}
-        </a>
-      </td>
-      <td className="px-3 py-2.5 text-gray-700">{job.company}</td>
-      <td className="px-3 py-2.5 text-center">
-        {job.fit_score !== null ? (
-          <FitScoreBadge score={job.fit_score} />
-        ) : (
-          <span className="text-gray-400">—</span>
-        )}
-      </td>
-      <td className="px-3 py-2.5 text-center">
-        <span
-          className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${style.bg} ${style.text}`}
-        >
-          {style.label}
-        </span>
-      </td>
-    </tr>
+    <>
+      <tr
+        className="border-b border-gray-50 hover:bg-gray-50 transition-colors cursor-pointer"
+        onClick={() => job.fit_rationale && setExpanded(!expanded)}
+      >
+        <td className="px-3 py-2.5 text-center" onClick={(e) => e.stopPropagation()}>
+          {job.promoted ? (
+            <span className="text-green-500" title="Promoted">✓</span>
+          ) : (
+            <input
+              type="checkbox"
+              checked={selected}
+              onChange={onToggle}
+              className="w-4 h-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+              aria-label={`Select ${job.job_title} at ${job.company}`}
+            />
+          )}
+        </td>
+        <td className="px-3 py-2.5">
+          <a
+            href={job.linkedin_url}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-blue-600 hover:underline font-medium"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {job.job_title}
+          </a>
+        </td>
+        <td className="px-3 py-2.5 text-gray-700">{job.company}</td>
+        <td className="px-3 py-2.5 text-center">
+          {job.fit_score !== null ? (
+            <FitScoreBadge score={job.fit_score} />
+          ) : (
+            <span className="text-gray-400">—</span>
+          )}
+        </td>
+        <td className="px-3 py-2.5 text-center">
+          <span
+            className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${style.bg} ${style.text}`}
+          >
+            {style.label}
+          </span>
+        </td>
+      </tr>
+      {expanded && job.fit_rationale && (
+        <tr className="bg-gray-50">
+          <td colSpan={5} className="px-6 py-3">
+            <p className="text-xs text-gray-600 leading-relaxed whitespace-pre-wrap">
+              {job.fit_rationale}
+            </p>
+          </td>
+        </tr>
+      )}
+    </>
   );
 }
 
