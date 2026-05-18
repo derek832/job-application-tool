@@ -135,6 +135,48 @@ async def _check_chrome_reachable(cdp_url: str) -> bool:
         return False
 
 
+async def _get_ws_url(cdp_url: str) -> str | None:
+    """Fetch the WebSocket debugger URL from Chrome's /json/version endpoint.
+
+    Uses the Host:localhost header workaround for Docker compatibility.
+    Rewrites the WebSocket URL hostname to match the cdp_url host so that
+    Docker containers can reach Chrome via host.docker.internal.
+
+    Args:
+        cdp_url: The base CDP URL (e.g., http://host.docker.internal:9222).
+
+    Returns:
+        The webSocketDebuggerUrl string (rewritten for Docker), or None if unavailable.
+    """
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.get(
+                f"{cdp_url}/json/version",
+                timeout=5.0,
+                headers={"Host": "localhost"},
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                ws_url = data.get("webSocketDebuggerUrl")
+                if ws_url:
+                    # Chrome returns ws://localhost/devtools/... or ws://127.0.0.1:9222/devtools/...
+                    # From Docker we need ws://host.docker.internal:9222/devtools/...
+                    from urllib.parse import urlparse
+                    cdp_parsed = urlparse(cdp_url)
+                    cdp_host = cdp_parsed.hostname or "host.docker.internal"
+                    cdp_port = cdp_parsed.port or 9222
+                    # Replace host and ensure port is present
+                    ws_url = ws_url.replace("127.0.0.1", cdp_host).replace("localhost", cdp_host)
+                    # If port is missing from the WS URL, inject it
+                    if f":{cdp_port}" not in ws_url:
+                        ws_url = ws_url.replace(f"ws://{cdp_host}/", f"ws://{cdp_host}:{cdp_port}/")
+                        ws_url = ws_url.replace(f"wss://{cdp_host}/", f"wss://{cdp_host}:{cdp_port}/")
+                    return ws_url
+    except (httpx.ConnectError, httpx.TimeoutException, httpx.HTTPError):
+        pass
+    return None
+
+
 async def _check_linkedin_session(cdp_url: str) -> tuple[bool, str | None]:
     """Connect via Playwright CDP, navigate to linkedin.com/feed, check for login redirect.
 
@@ -147,8 +189,16 @@ async def _check_linkedin_session(cdp_url: str) -> tuple[bool, str | None]:
         If not authenticated, error_message describes the issue.
     """
     try:
+        # Get the WebSocket URL with host rewritten for Docker compatibility
+        ws_url = await _get_ws_url(cdp_url)
+        if not ws_url:
+            return False, "LinkedIn session check failed: could not get WebSocket URL from Chrome"
+
         async with async_playwright() as pw:
-            browser = await pw.chromium.connect_over_cdp(cdp_url)
+            # connect_over_cdp with a ws:// URL and headers for the WS upgrade
+            browser = await pw.chromium.connect_over_cdp(
+                ws_url, headers={"Host": "localhost"}
+            )
             try:
                 context = browser.contexts[0] if browser.contexts else await browser.new_context()
                 page = await context.new_page()
