@@ -469,45 +469,8 @@ async def _go_to_next_page(page: Page) -> bool:
     Returns:
         True if the page navigated to the next results page, False otherwise.
     """
-    # Scroll the job list panel to the bottom to reveal pagination controls.
-    # LinkedIn's job search uses a scrollable left panel — window.scrollBy
-    # doesn't work because pagination is inside that panel's scroll container.
-    job_list_container = await page.query_selector(
-        ".jobs-search-results-list, "
-        ".scaffold-layout__list > div, "
-        ".jobs-search-results, "
-        "[class*='jobs-search-results-list'], "
-        "[class*='scaffold-layout__list']"
-    )
-
-    if job_list_container:
-        # Scroll the job list container using mouse wheel
-        box = await job_list_container.bounding_box()
-        if box:
-            # Position mouse in the middle of the job list panel
-            center_x = box["x"] + box["width"] / 2
-            center_y = box["y"] + box["height"] / 2
-            await page.mouse.move(center_x, center_y)
-            # Scroll down with mouse wheel in increments
-            for _ in range(10):
-                await page.mouse.wheel(0, 500)
-                await _human_delay(0.3, 0.5)
-        else:
-            # Fallback: scroll the element via JS
-            for _ in range(10):
-                await page.evaluate(
-                    """(el) => el.scrollBy(0, 500)""",
-                    job_list_container,
-                )
-                await _human_delay(0.3, 0.5)
-    else:
-        # Last fallback: scroll the whole page
-        for _ in range(8):
-            await page.evaluate("window.scrollBy(0, 600)")
-            await _human_delay(0.3, 0.5)
-
-    # Extra pause for any lazy-loaded pagination to render
-    await _human_delay(1.5, 2.5)
+    # Brief pause to ensure any lazy-loaded pagination elements are rendered
+    await _human_delay(1.0, 2.0)
 
     # Try multiple selector strategies for the Next button
     # LinkedIn uses different markup depending on the page variant
