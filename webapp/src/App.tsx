@@ -1,5 +1,5 @@
-import { useState, useCallback } from "react";
-import { getQueue } from "./api/client";
+import { useState, useCallback, useEffect } from "react";
+import { getQueue, getLatestPreview } from "./api/client";
 import { Navigation, type Page } from "./components/Navigation";
 import { ConnectionError } from "./components/ConnectionError";
 import { usePolling } from "./hooks/usePolling";
@@ -55,6 +55,32 @@ function App() {
     setActivePage("preview");
   }
 
+  // Load latest preview run ID on mount so the Preview nav item works
+  useEffect(() => {
+    async function loadLatestPreview() {
+      try {
+        const latest = await getLatestPreview();
+        if (latest) setPreviewRunId(latest.run_id);
+      } catch {
+        // Silently ignore — preview nav just won't work until a run is triggered
+      }
+    }
+    loadLatestPreview();
+  }, []);
+
+  // When navigating to preview without a run ID, try to load the latest
+  const handleNavigate = useCallback(async (page: Page) => {
+    if (page === "preview" && !previewRunId) {
+      try {
+        const latest = await getLatestPreview();
+        if (latest) setPreviewRunId(latest.run_id);
+      } catch {
+        // ignore
+      }
+    }
+    setActivePage(page);
+  }, [previewRunId]);
+
   function renderPage(page: Page): React.JSX.Element {
     switch (page) {
       case "dashboard":
@@ -80,7 +106,7 @@ function App() {
 
   return (
     <div className="flex h-screen bg-gray-50">
-      <Navigation activePage={activePage} onNavigate={setActivePage} />
+      <Navigation activePage={activePage} onNavigate={handleNavigate} />
       <main className="flex-1 overflow-y-auto">
         {!connection.connected && (
           <ConnectionError
