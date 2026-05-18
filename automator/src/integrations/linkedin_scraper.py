@@ -443,7 +443,8 @@ async def _extract_job_ids_from_page(page: Page) -> set[str]:
 async def _go_to_next_page(page: Page) -> bool:
     """Attempt to navigate to the next page of search results.
 
-    Looks for a pagination button or link that advances to the next page.
+    Scrolls to the bottom of the page first to ensure pagination controls
+    are rendered/visible, then looks for a Next button or link.
     Returns True if navigation succeeded, False if no next page is available.
 
     Args:
@@ -452,6 +453,15 @@ async def _go_to_next_page(page: Page) -> bool:
     Returns:
         True if the page navigated to the next results page, False otherwise.
     """
+    # Scroll to the bottom of the page to reveal pagination controls
+    # LinkedIn lazy-loads the pagination buttons — they're below the fold
+    for _ in range(5):
+        await page.evaluate("window.scrollBy(0, 800)")
+        await _human_delay(0.3, 0.6)
+
+    # Extra pause for any lazy-loaded pagination to render
+    await _human_delay(1.0, 2.0)
+
     # LinkedIn uses an aria-label="Next" button or a button with specific selectors
     next_button = await page.query_selector(
         "button[aria-label='Next'], "
@@ -461,15 +471,24 @@ async def _go_to_next_page(page: Page) -> bool:
     )
 
     if next_button is None:
+        logger.debug("pagination_next_button_not_found")
         return False
 
     is_disabled = await next_button.get_attribute("disabled")
     if is_disabled is not None:
+        logger.debug("pagination_next_button_disabled")
         return False
 
+    # Scroll the button into view and click
+    await next_button.scroll_into_view_if_needed()
+    await _human_delay(0.5, 1.0)
     await next_button.click()
     await page.wait_for_load_state("networkidle")
     await _human_delay(5.0, 12.0)
+
+    # Scroll back to top for the next page's card processing
+    await page.evaluate("window.scrollTo(0, 0)")
+    await _human_delay(1.0, 2.0)
     return True
 
 
