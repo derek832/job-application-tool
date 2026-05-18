@@ -658,6 +658,16 @@ async def run_pipeline(session: AsyncSession | None = None) -> None:
     except Exception as exc:
         logger.error("pipeline_fatal_error", error=str(exc))
     finally:
+        # Commit any pending work from the main session BEFORE attempting
+        # state reset with a separate session (avoids SQLite lock conflicts)
+        try:
+            await session.commit()
+        except Exception as commit_exc:
+            logger.error("pipeline_final_commit_failed", error=str(commit_exc))
+            try:
+                await session.rollback()
+            except Exception:
+                pass
         # Step 11: Close the page we created (but NOT the browser — it's the user's Chrome)
         if browser_context:
             try:
