@@ -474,8 +474,9 @@ async def _go_to_next_page(page: Page) -> bool:
     # doesn't work because pagination is inside that panel's scroll container.
     job_list_container = await page.query_selector(
         ".jobs-search-results-list, "
-        "[class*='jobs-search-results'], "
-        ".scaffold-layout__list, "
+        ".scaffold-layout__list > div, "
+        ".jobs-search-results, "
+        "[class*='jobs-search-results-list'], "
         "[class*='scaffold-layout__list']"
     )
 
@@ -511,13 +512,19 @@ async def _go_to_next_page(page: Page) -> bool:
     # Try multiple selector strategies for the Next button
     # LinkedIn uses different markup depending on the page variant
     selectors = [
+        # LinkedIn's current pagination: numbered buttons, find the one after active
+        (
+            "li.jobs-search-pagination__indicator"
+            ":has(button.jobs-search-pagination__indicator-button--active)"
+            " + li button"
+        ),
+        # Artdeco pagination (older variant)
         "button.artdeco-pagination__button--next",
         "button[aria-label='Next']",
         "a[aria-label='Next']",
         "li.artdeco-pagination__indicator--number.active + li button",
         "li.artdeco-pagination__indicator--number.active + li a",
         "button[aria-label='Page forward']",
-        ".artdeco-pagination__button--next",
     ]
 
     next_button = None
@@ -530,7 +537,8 @@ async def _go_to_next_page(page: Page) -> bool:
     if next_button is None:
         # Last resort: look for any pagination container and find a "next" element
         pagination = await page.query_selector(
-            ".artdeco-pagination, nav[aria-label='Pagination'], [class*='pagination']"
+            ".jobs-search-pagination, .artdeco-pagination, "
+            "nav[aria-label='Pagination'], [class*='pagination']"
         )
         if pagination:
             # There IS a pagination container but we can't find the Next button
