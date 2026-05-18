@@ -14,7 +14,6 @@ services:
       - CLAUDE_API_KEY=${CLAUDE_API_KEY}
       - GMAIL_USER=${GMAIL_USER}
       - GOOGLE_APPS_SCRIPT_URL=${GOOGLE_APPS_SCRIPT_URL}
-      - SMS_GATEWAY=${SMS_GATEWAY}
       - API_TOKEN=${API_TOKEN}
       - DATA_DIR=/app/data
       - LAN_IP=${LAN_IP:-}

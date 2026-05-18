@@ -41,9 +41,10 @@ from src.api.schemas import (
     UserProfile,
     UserProfileUpdate,
 )
-from src.db.blacklist_repo import add_entry, get_all_entries, remove_entry, get_entries_by_type
+from src.db.blacklist_repo import add_entry, get_all_entries, get_entries_by_type, remove_entry
 from src.db.config_repo import get_config, set_config
 from src.db.database import get_session
+from src.integrations.ntfy_client import NtfyAction, NtfyPayload, NtfySettings, publish
 from src.scheduler.schedule_manager import (
     ScheduleConfig,
     apply_schedule,
@@ -278,9 +279,7 @@ async def put_settings(
 # ---------------------------------------------------------------------------
 
 _URL_PATTERN = re.compile(r"^https?://")
-_LAN_PATTERN = re.compile(
-    r"^(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}|[a-zA-Z0-9\-\.]+)(:\d{1,5})?$"
-)
+_LAN_PATTERN = re.compile(r"^(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}|[a-zA-Z0-9\-\.]+)(:\d{1,5})?$")
 
 
 class NtfyConfigResponse(BaseModel):
@@ -846,4 +845,192 @@ async def remove_blacklist_title(
     return JSONResponse(
         status_code=200,
         content={"detail": f"Title pattern '{entry}' removed from blacklist"},
+    )
+
+
+# ---------------------------------------------------------------------------
+# Ntfy Connection Test
+# ---------------------------------------------------------------------------
+
+
+class NtfyTestResponse(BaseModel):
+    """Response schema for POST /config/ntfy/test.
+
+    Attributes:
+        sent: Whether the test notification was published successfully.
+        error: Error message if the publish failed.
+        test_id: Unique ID for this test (used to confirm button press).
+    """
+
+    sent: bool
+    error: str | None = None
+    test_id: str | None = None
+
+
+class NtfyTestStatusResponse(BaseModel):
+    """Response schema for GET /config/ntfy/test/status.
+
+    Attributes:
+        confirmed: Whether the action button was pressed.
+        confirmed_at: ISO 8601 timestamp of when the button was pressed.
+        test_id: The test ID that was confirmed.
+    """
+
+    confirmed: bool
+    confirmed_at: str | None = None
+    test_id: str | None = None
+
+
+@router.post("/ntfy/test", response_model=NtfyTestResponse)
+async def test_ntfy_connection(
+    session: AsyncSession = Depends(get_session),
+) -> NtfyTestResponse | JSONResponse:
+    """Send a test notification to verify ntfy connectivity.
+
+    Publishes a test message to the urgent topic with an action button.
+    When the user taps the button on their phone, it calls back to the
+    /config/ntfy/test/confirm endpoint, which records the confirmation.
+
+    Requires ntfy to be enabled and fully configured (server URL, urgent
+    topic, LAN base URL, and API token).
+    """
+    import secrets
+
+    logger.info("ntfy_test_requested")
+
+    # Load ntfy config
+    ntfy_enabled_raw = await get_config(session, "ntfy_enabled")
+    ntfy_enabled = ntfy_enabled_raw is True or ntfy_enabled_raw == "true"
+
+    if not ntfy_enabled:
+        return JSONResponse(
+            status_code=422,
+            content={"detail": "Ntfy is not enabled. Enable it first."},
+        )
+
+    ntfy_server_url = await get_config(session, "ntfy_server_url")
+    ntfy_urgent_topic = await get_config(session, "ntfy_urgent_topic")
+    lan_base_url = await get_config(session, "lan_base_url")
+    api_token = await get_config(session, "api_token")
+
+    if not ntfy_server_url or not ntfy_urgent_topic:
+        return JSONResponse(
+            status_code=422,
+            content={"detail": "Ntfy server URL and urgent topic must be configured."},
+        )
+
+    # Generate a unique test ID
+    test_id = secrets.token_hex(8)
+
+    # Build settings
+    settings = NtfySettings(
+        server_url=ntfy_server_url,
+        urgent_topic=ntfy_urgent_topic,
+        info_topic="",  # Not used for test
+        lan_base_url=lan_base_url,
+        api_token=api_token or "",
+    )
+
+    # Build action button (only if LAN base URL is configured)
+    actions: list[NtfyAction] | None = None
+    if lan_base_url and api_token:
+        actions = [
+            NtfyAction(
+                action="http",
+                label="✓ Confirm Connection",
+                url=f"{lan_base_url}/config/ntfy/test/confirm?test_id={test_id}",
+                method="POST",
+                headers={"Authorization": f"Bearer {api_token}"},
+            ),
+        ]
+
+    payload = NtfyPayload(
+        topic=ntfy_urgent_topic,
+        title="Job Automator — Connection Test",
+        message="Tap the button below to confirm notifications are working.",
+        priority=4,
+        tags=["white_check_mark"],
+        actions=actions,
+    )
+
+    result = await publish(payload, settings)
+
+    if result.ok:
+        # Store the test_id and timestamp so we can check for confirmation
+        await set_config(
+            session,
+            "ntfy_test_pending",
+            {
+                "test_id": test_id,
+                "sent_at": datetime.now(UTC).isoformat(),
+                "confirmed": False,
+                "confirmed_at": None,
+            },
+        )
+        await session.commit()
+
+        logger.info("ntfy_test_sent", test_id=test_id)
+        return NtfyTestResponse(sent=True, test_id=test_id)
+    else:
+        logger.error("ntfy_test_failed", error=result.error)
+        return NtfyTestResponse(sent=False, error=result.error)
+
+
+@router.get("/ntfy/test/status", response_model=NtfyTestStatusResponse)
+async def get_ntfy_test_status(
+    session: AsyncSession = Depends(get_session),
+) -> NtfyTestStatusResponse:
+    """Check whether the ntfy test action button has been pressed.
+
+    Returns the confirmation status of the most recent test notification.
+    The UI polls this endpoint after sending a test to detect when the
+    user taps the action button on their phone.
+    """
+    data = await get_config(session, "ntfy_test_pending")
+
+    if not data or not isinstance(data, dict):
+        return NtfyTestStatusResponse(confirmed=False)
+
+    return NtfyTestStatusResponse(
+        confirmed=data.get("confirmed", False),
+        confirmed_at=data.get("confirmed_at"),
+        test_id=data.get("test_id"),
+    )
+
+
+@router.post("/ntfy/test/confirm")
+async def confirm_ntfy_test(
+    test_id: str | None = None,
+    session: AsyncSession = Depends(get_session),
+) -> JSONResponse:
+    """Callback endpoint for the ntfy test action button.
+
+    When the user taps "Confirm Connection" on the test notification,
+    ntfy sends a POST to this endpoint. We record the confirmation so
+    the UI can detect it via polling.
+
+    This endpoint does NOT require auth — it's called by ntfy's action
+    button mechanism which includes the Bearer token in the request headers.
+    The auth is handled by the verify_token dependency on the router.
+    """
+    logger.info("ntfy_test_confirm_received", test_id=test_id)
+
+    data = await get_config(session, "ntfy_test_pending")
+
+    if data and isinstance(data, dict):
+        # Verify test_id matches if provided
+        if test_id and data.get("test_id") != test_id:
+            return JSONResponse(
+                status_code=404,
+                content={"detail": "Test ID does not match pending test."},
+            )
+
+        data["confirmed"] = True
+        data["confirmed_at"] = datetime.now(UTC).isoformat()
+        await set_config(session, "ntfy_test_pending", data)
+        await session.commit()
+
+    return JSONResponse(
+        status_code=200,
+        content={"detail": "Connection confirmed."},
     )

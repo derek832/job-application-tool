@@ -100,7 +100,6 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             "claude_api_key": os.environ.get("CLAUDE_API_KEY", ""),
             "gmail_user": os.environ.get("GMAIL_USER", ""),
             "gdocs_script_url": os.environ.get("GOOGLE_APPS_SCRIPT_URL", ""),
-            "sms_gateway": os.environ.get("SMS_GATEWAY", ""),
         }
 
         updated = False

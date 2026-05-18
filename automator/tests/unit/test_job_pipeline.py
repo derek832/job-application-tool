@@ -175,15 +175,15 @@ async def test_pipeline_skips_terminal_status_jobs(async_session: AsyncSession):
 
 
 def test_build_sms_settings_returns_none_when_incomplete():
-    """_build_sms_settings returns None when required fields are missing."""
+    """_build_sms_settings always returns None (SMS deprecated)."""
     from src.api.schemas import Settings
 
     settings = Settings(gmail_user=None, gmail_app_password=None, sms_gateway=None)
     assert _build_sms_settings(settings) is None
 
 
-def test_build_sms_settings_returns_settings_when_complete():
-    """_build_sms_settings returns SMSSettings when all fields are present."""
+def test_build_sms_settings_returns_none_when_complete():
+    """_build_sms_settings returns None even with all fields present (SMS deprecated)."""
     from src.api.schemas import Settings
 
     settings = Settings(
@@ -192,13 +192,11 @@ def test_build_sms_settings_returns_settings_when_complete():
         sms_gateway="5551234567@txt.att.net",
     )
     result = _build_sms_settings(settings)
-    assert result is not None
-    assert result.gmail_user == "user@gmail.com"
-    assert result.sms_gateway == "5551234567@txt.att.net"
+    assert result is None
 
 
 def test_build_sms_settings_returns_none_when_redacted():
-    """_build_sms_settings returns None when secrets are redacted ('***')."""
+    """_build_sms_settings returns None when secrets are redacted (SMS deprecated)."""
     from src.api.schemas import Settings
 
     settings = Settings(

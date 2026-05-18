@@ -68,28 +68,17 @@ class TestSetupScheduler:
         assert mock_app.state.scheduler is scheduler
 
     @patch("src.scheduler.scheduler.register_backup_job")
-    async def test_registers_weekday_hourly_cron_job(
+    async def test_no_hardcoded_pipeline_cron(
         self, mock_register_backup: MagicMock, mock_app: MagicMock
     ) -> None:
-        """setup_scheduler registers an hourly job with id 'weekday_pipeline_run'."""
+        """setup_scheduler does NOT register a hardcoded pipeline cron job.
+
+        Pipeline scheduling is managed entirely via the UI/database config.
+        """
         scheduler = setup_scheduler(mock_app)
 
         job = scheduler.get_job("weekday_pipeline_run")
-        assert job is not None
-        assert job.name == "Weekday Hourly Job Pipeline Run (8AM-8PM ET)"
-
-    @patch("src.scheduler.scheduler.register_backup_job")
-    async def test_cron_trigger_uses_eastern_timezone(
-        self, mock_register_backup: MagicMock, mock_app: MagicMock
-    ) -> None:
-        """setup_scheduler configures the cron trigger with America/New_York timezone."""
-        from zoneinfo import ZoneInfo
-
-        scheduler = setup_scheduler(mock_app)
-
-        job = scheduler.get_job("weekday_pipeline_run")
-        trigger = job.trigger
-        assert trigger.timezone == ZoneInfo("America/New_York")
+        assert job is None
 
     @patch("src.scheduler.scheduler.register_backup_job")
     async def test_registers_backup_job(

@@ -122,10 +122,7 @@ async def run_pipeline(session: AsyncSession | None = None) -> None:
     user_profile = UserProfile.model_validate(user_profile_raw or {})
     settings = Settings.model_validate(settings_raw or {})
 
-    # Build SMS settings if configured
-    sms_settings = _build_sms_settings(settings)
-
-    # Build unified notification settings (ntfy + SMS)
+    # Build unified notification settings (ntfy only — SMS deprecated)
     notification_settings = await _build_notification_settings(session, settings)
 
     # Build Claude client
@@ -369,9 +366,7 @@ async def run_pipeline(session: AsyncSession | None = None) -> None:
                     if matched_entry:
                         # Parse "company:Revature" or "title:intern"
                         entry_type_key, entry_value = matched_entry.split(":", 1)
-                        bl_type = (
-                            "company" if entry_type_key == "company" else "title_pattern"
-                        )
+                        bl_type = "company" if entry_type_key == "company" else "title_pattern"
                         entry_id = _bl_entry_lookup.get((bl_type, entry_value.lower()))
                         if entry_id is not None:
                             await _increment_hit_count(session, entry_id)
@@ -731,7 +726,11 @@ async def _connect_to_chrome(pw, cdp_url: str):
     # Strategy 2: Discover fresh websocket URL from /json/version
     try:
         async with httpx.AsyncClient(follow_redirects=True) as client:
-            resp = await client.get(f"{cdp_url}/json/version", timeout=5.0, headers={"Host": "localhost"})
+            resp = await client.get(
+                f"{cdp_url}/json/version",
+                timeout=5.0,
+                headers={"Host": "localhost"},
+            )
             if resp.status_code == 200:
                 version_data = resp.json()
                 ws_url = version_data.get("webSocketDebuggerUrl", "")
@@ -796,17 +795,15 @@ async def _load_resume_content(gdocs_client: GDocsClient | None) -> str:
 def _build_sms_settings(settings: Settings) -> SMSSettings | None:
     """Build SMSSettings from the application settings if all fields are present.
 
+    SMS has been deprecated in favor of ntfy push notifications.
+    This function now always returns None to disable SMS entirely.
+
     Args:
-        settings: The application settings containing Gmail and SMS config.
+        settings: The application settings (unused, retained for API compat).
 
     Returns:
-        An SMSSettings instance if all required fields are configured, else None.
+        Always None — SMS is disabled.
     """
-    if settings.gmail_user and settings.gmail_user != "***" and settings.sms_gateway:
-        return SMSSettings(
-            gmail_user=settings.gmail_user,
-            sms_gateway=settings.sms_gateway,
-        )
     return None
 
 
@@ -887,8 +884,7 @@ async def _generate_and_publish_run_summary(
 
         # Get counts of jobs by their current status
         result = await session.execute(
-            select(JobRecord.status, func.count(JobRecord.id))
-            .group_by(JobRecord.status)
+            select(JobRecord.status, func.count(JobRecord.id)).group_by(JobRecord.status)
         )
         status_counts: dict[str, int] = dict(result.all())
 

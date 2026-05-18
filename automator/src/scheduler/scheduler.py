@@ -13,7 +13,6 @@ from zoneinfo import ZoneInfo
 
 import structlog
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from apscheduler.triggers.cron import CronTrigger
 
 from src.scheduler.backup_job import register_backup_job
 
@@ -45,16 +44,14 @@ async def _run_pipeline_wrapper() -> None:
 def setup_scheduler(app: FastAPI, scheduled_time: str | None = None) -> AsyncIOScheduler:
     """Create, configure, and start the APScheduler instance.
 
-    Registers a weekday cron job (Monday–Friday) that triggers the job pipeline
-    hourly from 8 AM to 8 PM Eastern time. Also registers the daily database
-    backup job. The scheduler instance is stored on ``app.state.scheduler`` for
-    access from route handlers.
+    Does NOT register any pipeline cron jobs — those are managed entirely by
+    the schedule_config in the database via apply_schedule(). This function
+    only creates the scheduler, registers the daily backup job, and starts it.
 
     Args:
         app: The FastAPI application instance. The scheduler is attached to
             ``app.state.scheduler``.
-        scheduled_time: Unused, retained for API compatibility. The schedule is
-            fixed to hourly 8 AM–8 PM Eastern on weekdays.
+        scheduled_time: Unused, retained for API compatibility.
 
     Returns:
         The configured and started AsyncIOScheduler instance.
@@ -62,26 +59,6 @@ def setup_scheduler(app: FastAPI, scheduled_time: str | None = None) -> AsyncIOS
     global _scheduler  # noqa: PLW0603
 
     scheduler = AsyncIOScheduler(timezone=EASTERN_TZ)
-
-    # Register the weekday pipeline cron job (Mon-Fri, hourly 8 AM - 8 PM Eastern)
-    scheduler.add_job(
-        _run_pipeline_wrapper,
-        trigger=CronTrigger(
-            day_of_week="mon-sun",
-            hour="8-20",
-            minute=0,
-            timezone=EASTERN_TZ,
-        ),
-        id="weekday_pipeline_run",
-        name="Weekday Hourly Job Pipeline Run (8AM-8PM ET)",
-        replace_existing=True,
-    )
-
-    logger.info(
-        "pipeline_cron_registered",
-        job_id="weekday_pipeline_run",
-        schedule="mon-fri hourly 08:00-20:00 America/New_York",
-    )
 
     # Register the daily backup job
     register_backup_job(scheduler)
@@ -93,7 +70,7 @@ def setup_scheduler(app: FastAPI, scheduled_time: str | None = None) -> AsyncIOS
     app.state.scheduler = scheduler
     _scheduler = scheduler
 
-    logger.info("scheduler_started")
+    logger.info("scheduler_started", note="no hardcoded pipeline cron — schedule managed via UI")
 
     return scheduler
 
@@ -119,6 +96,3 @@ def trigger_now() -> None:
     )
 
     logger.info("manual_pipeline_run_triggered")
-
-
-

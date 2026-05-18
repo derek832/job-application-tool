@@ -447,6 +447,33 @@ export async function updateNtfyConfig(data: NtfyConfigUpdate): Promise<NtfyConf
 }
 
 // ---------------------------------------------------------------------------
+// Ntfy Connection Test
+// ---------------------------------------------------------------------------
+
+export const NtfyTestResponseSchema = z.object({
+  sent: z.boolean(),
+  error: z.string().nullable().optional(),
+  test_id: z.string().nullable().optional(),
+});
+
+export const NtfyTestStatusResponseSchema = z.object({
+  confirmed: z.boolean(),
+  confirmed_at: z.string().nullable().optional(),
+  test_id: z.string().nullable().optional(),
+});
+
+export type NtfyTestResponse = z.infer<typeof NtfyTestResponseSchema>;
+export type NtfyTestStatusResponse = z.infer<typeof NtfyTestStatusResponseSchema>;
+
+export async function testNtfyConnection(): Promise<NtfyTestResponse> {
+  return request("/config/ntfy/test", NtfyTestResponseSchema, { method: "POST" });
+}
+
+export async function getNtfyTestStatus(): Promise<NtfyTestStatusResponse> {
+  return request("/config/ntfy/test/status", NtfyTestStatusResponseSchema);
+}
+
+// ---------------------------------------------------------------------------
 // Preview Pipeline
 // ---------------------------------------------------------------------------
 
