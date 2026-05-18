@@ -469,11 +469,41 @@ async def _go_to_next_page(page: Page) -> bool:
     Returns:
         True if the page navigated to the next results page, False otherwise.
     """
-    # Scroll to the bottom of the page to reveal pagination controls
-    # LinkedIn lazy-loads the pagination buttons — they're below the fold
-    for _ in range(8):
-        await page.evaluate("window.scrollBy(0, 600)")
-        await _human_delay(0.3, 0.5)
+    # Scroll the job list panel to the bottom to reveal pagination controls.
+    # LinkedIn's job search uses a scrollable left panel — window.scrollBy
+    # doesn't work because pagination is inside that panel's scroll container.
+    job_list_container = await page.query_selector(
+        ".jobs-search-results-list, "
+        "[class*='jobs-search-results'], "
+        ".scaffold-layout__list, "
+        "[class*='scaffold-layout__list']"
+    )
+
+    if job_list_container:
+        # Scroll the job list container using mouse wheel
+        box = await job_list_container.bounding_box()
+        if box:
+            # Position mouse in the middle of the job list panel
+            center_x = box["x"] + box["width"] / 2
+            center_y = box["y"] + box["height"] / 2
+            await page.mouse.move(center_x, center_y)
+            # Scroll down with mouse wheel in increments
+            for _ in range(10):
+                await page.mouse.wheel(0, 500)
+                await _human_delay(0.3, 0.5)
+        else:
+            # Fallback: scroll the element via JS
+            for _ in range(10):
+                await page.evaluate(
+                    """(el) => el.scrollBy(0, 500)""",
+                    job_list_container,
+                )
+                await _human_delay(0.3, 0.5)
+    else:
+        # Last fallback: scroll the whole page
+        for _ in range(8):
+            await page.evaluate("window.scrollBy(0, 600)")
+            await _human_delay(0.3, 0.5)
 
     # Extra pause for any lazy-loaded pagination to render
     await _human_delay(1.5, 2.5)
@@ -504,13 +534,15 @@ async def _go_to_next_page(page: Page) -> bool:
         )
         if pagination:
             # There IS a pagination container but we can't find the Next button
-            # Take a debug screenshot
+            # Dump the HTML for debugging
             try:
-                await page.screenshot(path="data/debug_pagination.png")
+                html = await pagination.inner_html()
                 logger.warning(
                     "pagination_container_found_but_no_next_button",
                     hint="check data/debug_pagination.png",
+                    html_snippet=html[:500],
                 )
+                await page.screenshot(path="data/debug_pagination.png")
             except Exception:
                 pass
         else:
