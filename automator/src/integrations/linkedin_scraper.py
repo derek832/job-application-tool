@@ -471,27 +471,55 @@ async def _go_to_next_page(page: Page) -> bool:
     """
     # Scroll to the bottom of the page to reveal pagination controls
     # LinkedIn lazy-loads the pagination buttons — they're below the fold
-    for _ in range(5):
-        await page.evaluate("window.scrollBy(0, 800)")
-        await _human_delay(0.3, 0.6)
+    for _ in range(8):
+        await page.evaluate("window.scrollBy(0, 600)")
+        await _human_delay(0.3, 0.5)
 
     # Extra pause for any lazy-loaded pagination to render
-    await _human_delay(1.0, 2.0)
+    await _human_delay(1.5, 2.5)
 
-    # LinkedIn uses an aria-label="Next" button or a button with specific selectors
-    next_button = await page.query_selector(
-        "button[aria-label='Next'], "
-        "a[aria-label='Next'], "
-        "li.artdeco-pagination__indicator--number.active + li a, "
-        "button[aria-label='Page forward']"
-    )
+    # Try multiple selector strategies for the Next button
+    # LinkedIn uses different markup depending on the page variant
+    selectors = [
+        "button.artdeco-pagination__button--next",
+        "button[aria-label='Next']",
+        "a[aria-label='Next']",
+        "li.artdeco-pagination__indicator--number.active + li button",
+        "li.artdeco-pagination__indicator--number.active + li a",
+        "button[aria-label='Page forward']",
+        ".artdeco-pagination__button--next",
+    ]
+
+    next_button = None
+    for selector in selectors:
+        next_button = await page.query_selector(selector)
+        if next_button:
+            logger.debug("pagination_button_found", selector=selector)
+            break
 
     if next_button is None:
-        logger.debug("pagination_next_button_not_found")
+        # Last resort: look for any pagination container and find a "next" element
+        pagination = await page.query_selector(
+            ".artdeco-pagination, nav[aria-label='Pagination'], [class*='pagination']"
+        )
+        if pagination:
+            # There IS a pagination container but we can't find the Next button
+            # Take a debug screenshot
+            try:
+                await page.screenshot(path="data/debug_pagination.png")
+                logger.warning(
+                    "pagination_container_found_but_no_next_button",
+                    hint="check data/debug_pagination.png",
+                )
+            except Exception:
+                pass
+        else:
+            logger.debug("pagination_no_container_found")
         return False
 
     is_disabled = await next_button.get_attribute("disabled")
-    if is_disabled is not None:
+    aria_disabled = await next_button.get_attribute("aria-disabled")
+    if is_disabled is not None or aria_disabled == "true":
         logger.debug("pagination_next_button_disabled")
         return False
 
