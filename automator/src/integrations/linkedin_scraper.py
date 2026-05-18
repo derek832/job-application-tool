@@ -567,8 +567,9 @@ async def _go_to_next_page(page: Page) -> bool:
     await next_button.scroll_into_view_if_needed()
     await _human_delay(0.5, 1.0)
     await next_button.click()
-    await page.wait_for_load_state("networkidle")
-    await _human_delay(5.0, 12.0)
+    # Don't wait for networkidle — LinkedIn keeps background requests going.
+    # Just wait for DOM to update and give it time to render new cards.
+    await _human_delay(4.0, 7.0)
 
     # Scroll back to top for the next page's card processing
     await page.evaluate("window.scrollTo(0, 0)")
