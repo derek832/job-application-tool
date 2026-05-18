@@ -899,15 +899,6 @@ async def test_ntfy_connection(
     logger.info("ntfy_test_requested")
 
     # Load ntfy config
-    ntfy_enabled_raw = await get_config(session, "ntfy_enabled")
-    ntfy_enabled = ntfy_enabled_raw is True or ntfy_enabled_raw == "true"
-
-    if not ntfy_enabled:
-        return JSONResponse(
-            status_code=422,
-            content={"detail": "Ntfy is not enabled. Enable it first."},
-        )
-
     ntfy_server_url = await get_config(session, "ntfy_server_url")
     ntfy_urgent_topic = await get_config(session, "ntfy_urgent_topic")
     lan_base_url = await get_config(session, "lan_base_url")
