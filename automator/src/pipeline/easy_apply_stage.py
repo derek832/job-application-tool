@@ -31,7 +31,11 @@ NAVIGATION_TIMEOUT_MS = 30_000
 ELEMENT_TIMEOUT_MS = 10_000
 
 # Standard Easy Apply field selectors (LinkedIn's form structure)
-EASY_APPLY_BUTTON_SELECTOR = 'button.jobs-apply-button, button[aria-label*="Easy Apply"]'
+EASY_APPLY_BUTTON_SELECTOR = (
+    'button.jobs-apply-button:not(.artdeco-pill):not(.search-reusables__filter-pill-button), '
+    'button#jobs-apply-button-id, '
+    'button[data-live-test-job-apply-button]'
+)
 SUBMIT_BUTTON_SELECTOR = 'button[aria-label="Submit application"]'
 NEXT_BUTTON_SELECTOR = 'button[aria-label="Continue to next step"]'
 REVIEW_BUTTON_SELECTOR = 'button[aria-label="Review your application"]'
@@ -173,9 +177,22 @@ async def _execute_easy_apply(
     job_id = job_record.id
 
     # Step 1: Navigate to the job's LinkedIn URL
+    # LinkedIn shows the Easy Apply button in the search results split-view,
+    # but may not show it on the standalone job page (/jobs/view/{id}/).
+    # If the URL is a search results URL (already showing the job), skip navigation.
+    # If it's a direct job URL, try navigating to the search view with currentJobId.
     try:
-        await page.goto(job_record.linkedin_url, timeout=NAVIGATION_TIMEOUT_MS)
-        await page.wait_for_load_state("domcontentloaded")
+        current_url = page.url
+        job_url = job_record.linkedin_url
+
+        # Check if we're already on a page showing this job's Easy Apply button
+        existing_btn = await page.query_selector(EASY_APPLY_BUTTON_SELECTOR)
+        if existing_btn is None or "/jobs/search/" not in current_url:
+            # Navigate to the job URL
+            await page.goto(job_url, timeout=NAVIGATION_TIMEOUT_MS)
+            await page.wait_for_load_state("domcontentloaded")
+            # Give the page time to render dynamic content
+            await page.wait_for_timeout(2000)
     except (PlaywrightTimeout, Exception) as exc:
         raise ApplyError(
             message=f"Failed to navigate to job page: {exc}",
@@ -195,7 +212,9 @@ async def _execute_easy_apply(
         await easy_apply_btn.click()
         # Wait for the modal to appear
         await page.wait_for_selector(
-            'div[role="dialog"], div.jobs-easy-apply-modal', timeout=ELEMENT_TIMEOUT_MS
+            'div[role="dialog"], div.jobs-easy-apply-modal, '
+            'div.jobs-easy-apply-content, div[data-test-modal]',
+            timeout=ELEMENT_TIMEOUT_MS,
         )
     except PlaywrightTimeout as exc:
         raise ApplyError(
@@ -326,10 +345,19 @@ async def _fill_form_fields(
         if not label_text:
             continue
 
+        # Skip file upload labels — these are handled by _attach_resume
+        if any(
+            keyword in label_text
+            for keyword in ("upload resume", "upload cv", "upload cover letter", "upload file")
+        ):
+            continue
+
         # Find the associated input
         label_for = await label_el.get_attribute("for")
         if label_for:
-            input_el = await page.query_selector(f"#{label_for}")
+            # Use attribute selector to handle IDs with special characters
+            # (colons, parentheses, etc.) that break CSS ID selectors
+            input_el = await page.query_selector(f'[id="{label_for}"]')
         else:
             # Try sibling or child input
             input_el = await label_el.query_selector(
@@ -337,6 +365,11 @@ async def _fill_form_fields(
             )
 
         if input_el is None:
+            continue
+
+        # Skip file input elements — handled by _attach_resume
+        input_type = await input_el.get_attribute("type") or ""
+        if input_type == "file":
             continue
 
         # Check if the field already has a value
@@ -541,7 +574,7 @@ async def _handle_cover_letter(
         if "cover letter" in label_text:
             label_for = await label_el.get_attribute("for")
             if label_for:
-                cover_letter_field = await page.query_selector(f"#{label_for}")
+                cover_letter_field = await page.query_selector(f'[id="{label_for}"]')
             else:
                 cover_letter_field = await label_el.query_selector(
                     "~ textarea, ~ input[type='file'], textarea, input[type='file']"
