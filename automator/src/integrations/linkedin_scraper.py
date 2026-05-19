@@ -203,6 +203,12 @@ async def discover_and_extract_jobs(
     await page.goto(search_url, timeout=60000)
     await _human_delay(3.0, 6.0)
 
+    # Zoom out to 33% so the entire job list panel is visible without scrolling.
+    # This ensures all cards are rendered and clickable, and pagination buttons
+    # are visible in the viewport.
+    await page.evaluate("document.body.style.zoom = '0.33'")
+    await _human_delay(1.0, 2.0)
+
     all_discovered: list[DiscoveredJob] = []
     seen_ids: set[str] = set()
 
