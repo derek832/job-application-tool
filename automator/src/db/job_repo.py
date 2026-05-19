@@ -134,6 +134,9 @@ async def list_jobs(
     session: AsyncSession,
     status: str | None = None,
     search: str | None = None,
+    run_id: str | None = None,
+    min_score: int | None = None,
+    max_score: int | None = None,
     page: int = 1,
     limit: int = 20,
 ) -> list[JobRecord]:
@@ -144,6 +147,9 @@ async def list_jobs(
         status: If provided, filter to records matching this status.
         search: If provided, filter to records where ``job_title`` or
             ``company`` contains this substring (case-insensitive).
+        run_id: If provided, filter to records from this pipeline run.
+        min_score: If provided, filter to records with fit_score >= this value.
+        max_score: If provided, filter to records with fit_score <= this value.
         page: Page number (1-indexed). Defaults to 1.
         limit: Maximum records per page. Defaults to 20.
 
@@ -163,6 +169,15 @@ async def list_jobs(
                 JobRecord.company.ilike(pattern),
             )
         )
+
+    if run_id is not None:
+        query = query.where(JobRecord.run_id == run_id)
+
+    if min_score is not None:
+        query = query.where(JobRecord.fit_score >= min_score)
+
+    if max_score is not None:
+        query = query.where(JobRecord.fit_score <= max_score)
 
     offset = (page - 1) * limit
     query = query.order_by(JobRecord.discovered_at.desc()).offset(offset).limit(limit)

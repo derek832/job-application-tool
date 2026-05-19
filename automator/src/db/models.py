@@ -108,6 +108,7 @@ class JobRecord(Base):
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     queue_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     application_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    run_id: Mapped[str | None] = mapped_column(Text, nullable=True, default=None)
     discovered_at: Mapped[str] = mapped_column(Text, nullable=False)
     extracted_at: Mapped[str | None] = mapped_column(Text, nullable=True)
     scored_at: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -271,9 +272,7 @@ class RunSummary(Base):
     errors: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[str] = mapped_column(Text, nullable=False)
 
-    __table_args__ = (
-        Index("idx_run_summaries_created_at", desc("created_at")),
-    )
+    __table_args__ = (Index("idx_run_summaries_created_at", desc("created_at")),)
 
     def __repr__(self) -> str:
         return (
@@ -449,8 +448,7 @@ class PreviewRun(Base):
 
     def __repr__(self) -> str:
         return (
-            f"<PreviewRun id={self.id!r} status={self.status!r} "
-            f"discovered={self.total_discovered}>"
+            f"<PreviewRun id={self.id!r} status={self.status!r} discovered={self.total_discovered}>"
         )
 
 
@@ -498,9 +496,7 @@ class PreviewJob(Base):
     promoted_at: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     # Relationship
-    preview_run: Mapped[PreviewRun] = relationship(
-        "PreviewRun", back_populates="preview_jobs"
-    )
+    preview_run: Mapped[PreviewRun] = relationship("PreviewRun", back_populates="preview_jobs")
 
     __table_args__ = (
         Index("idx_preview_jobs_run_id", "run_id"),

@@ -46,6 +46,7 @@ export function JobHistory(): React.JSX.Element {
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("");
+  const [minScore, setMinScore] = useState<string>("");
   const [page, setPage] = useState(1);
 
   const fetchJobs = useCallback(async () => {
@@ -55,6 +56,7 @@ export function JobHistory(): React.JSX.Element {
       const data = await getJobs({
         search: search || undefined,
         status: statusFilter || undefined,
+        min_score: minScore ? Number(minScore) : undefined,
         page,
         limit: PAGE_SIZE,
       });
@@ -64,7 +66,7 @@ export function JobHistory(): React.JSX.Element {
     } finally {
       setLoading(false);
     }
-  }, [search, statusFilter, page]);
+  }, [search, statusFilter, minScore, page]);
 
   useEffect(() => {
     fetchJobs();
@@ -103,6 +105,18 @@ export function JobHistory(): React.JSX.Element {
             </option>
           ))}
         </select>
+        <input
+          type="number"
+          value={minScore}
+          onChange={(e) => {
+            setMinScore(e.target.value);
+            setPage(1);
+          }}
+          placeholder="Min score"
+          min={0}
+          max={100}
+          className="w-24 px-3 py-2 text-sm border border-gray-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+        />
       </form>
 
       {error && (
@@ -165,7 +179,17 @@ function JobRow({ job }: { job: JobRecordOut }): React.JSX.Element {
           <p className="text-xs text-gray-500">{job.company}</p>
         </div>
         {job.fit_score !== null && (
-          <span className="text-xs font-medium text-gray-600">{job.fit_score}%</span>
+          <span
+            className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold ${
+              job.fit_score >= 75
+                ? "bg-green-100 text-green-800"
+                : job.fit_score >= 50
+                  ? "bg-yellow-100 text-yellow-800"
+                  : "bg-red-100 text-red-800"
+            }`}
+          >
+            {job.fit_score}
+          </span>
         )}
         <span className="text-xs text-gray-400 shrink-0">
           {formatDate(job.discovered_at)}

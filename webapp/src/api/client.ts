@@ -87,6 +87,7 @@ export const JobRecordOutSchema = z.object({
   error_message: z.string().nullable(),
   queue_reason: z.string().nullable(),
   application_notes: z.string().nullable(),
+  run_id: z.string().nullable(),
   discovered_at: z.string(),
   extracted_at: z.string().nullable(),
   scored_at: z.string().nullable(),
@@ -547,6 +548,9 @@ export async function promotePreviewJobs(runId: string, jobIds: string[]): Promi
 export interface GetJobsParams {
   status?: string;
   search?: string;
+  run_id?: string;
+  min_score?: number;
+  max_score?: number;
   page?: number;
   limit?: number;
 }
@@ -554,12 +558,16 @@ export interface GetJobsParams {
 const JobRecordOutSchemaLenient = JobRecordOutSchema.extend({
   tailored_resume_text: z.string().nullable().optional(),
   application_notes: z.string().nullable().optional(),
+  run_id: z.string().nullable().optional(),
 });
 
 export async function getJobs(params?: GetJobsParams): Promise<JobRecordOut[]> {
   const query = new URLSearchParams();
   if (params?.status) query.set("status", params.status);
   if (params?.search) query.set("search", params.search);
+  if (params?.run_id) query.set("run_id", params.run_id);
+  if (params?.min_score !== undefined) query.set("min_score", String(params.min_score));
+  if (params?.max_score !== undefined) query.set("max_score", String(params.max_score));
   if (params?.page !== undefined) query.set("page", String(params.page));
   if (params?.limit !== undefined) query.set("limit", String(params.limit));
 
@@ -570,7 +578,8 @@ export async function getJobs(params?: GetJobsParams): Promise<JobRecordOut[]> {
     ...j,
     tailored_resume_text: j.tailored_resume_text ?? null,
     application_notes: j.application_notes ?? null,
-  }));
+    run_id: j.run_id ?? null,
+  } as JobRecordOut));
 }
 
 export async function getJob(id: string): Promise<JobRecordOut> {
@@ -578,7 +587,12 @@ export async function getJob(id: string): Promise<JobRecordOut> {
     `/jobs/${encodeURIComponent(id)}`,
     JobRecordOutSchemaLenient
   );
-  return { ...data, tailored_resume_text: data.tailored_resume_text ?? null, application_notes: data.application_notes ?? null };
+  return {
+    ...data,
+    tailored_resume_text: data.tailored_resume_text ?? null,
+    application_notes: data.application_notes ?? null,
+    run_id: data.run_id ?? null,
+  } as JobRecordOut;
 }
 
 export async function getJobStats(): Promise<StatsOut> {

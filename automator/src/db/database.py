@@ -154,6 +154,9 @@ async def init_db(engine: AsyncEngine | None = None) -> None:
     The function uses SQLAlchemy's ``create_all`` with ``checkfirst=True``
     (the default) so that existing tables are never dropped or altered.
 
+    After creating tables, runs lightweight migrations for columns added after
+    the initial schema (e.g. ``run_id`` on ``job_records``).
+
     Args:
         engine: The ``AsyncEngine`` to use.  If ``None``, the module-level
             singleton created by ``build_engine`` is used.
@@ -182,4 +185,39 @@ async def init_db(engine: AsyncEngine | None = None) -> None:
         # create_all is idempotent: tables that already exist are skipped.
         await conn.run_sync(Base.metadata.create_all)
 
+    # Run lightweight migrations for columns added after initial schema.
+    # SQLite supports ALTER TABLE ADD COLUMN — safe and idempotent.
+    await _run_migrations(resolved_engine)
+
     logger.info("database_ready")
+
+
+async def _run_migrations(engine: AsyncEngine) -> None:
+    """Apply incremental schema migrations for columns added post-launch.
+
+    Each migration checks whether the column already exists before attempting
+    to add it, making this function fully idempotent.
+
+    Args:
+        engine: The async engine to run migrations against.
+    """
+    from sqlalchemy import text as sa_text
+
+    migrations: list[tuple[str, str, str]] = [
+        # (table, column, SQL type)
+        ("job_records", "run_id", "TEXT"),
+    ]
+
+    async with engine.begin() as conn:
+        for table, column, col_type in migrations:
+            # Check if column exists by querying table_info
+            result = await conn.execute(sa_text(f"PRAGMA table_info({table})"))
+            columns = {row[1] for row in result.all()}
+            if column not in columns:
+                await conn.execute(sa_text(f"ALTER TABLE {table} ADD COLUMN {column} {col_type}"))
+                logger.info(
+                    "migration_column_added",
+                    table=table,
+                    column=column,
+                    col_type=col_type,
+                )

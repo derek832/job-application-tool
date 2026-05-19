@@ -298,7 +298,7 @@ async def discover_and_extract_jobs(
     config: SearchConfig,
     session: AsyncSession,
     max_pages: int = 5,
-    skip_viewed: bool = True,
+    known_job_ids: set[str] | None = None,
 ) -> list[DiscoveredJob]:
     """Discover jobs and extract descriptions from the search results page.
 
@@ -311,6 +311,8 @@ async def discover_and_extract_jobs(
         config: The search configuration to build the LinkedIn search URL.
         session: Active async database session for deduplication queries.
         max_pages: Maximum number of result pages to scrape. Defaults to 5.
+        known_job_ids: Set of job IDs discovered in recent runs. Jobs in this
+            set are skipped before clicking the card (cross-run dedup).
 
     Returns:
         A list of DiscoveredJob objects with title, company, and description.
@@ -362,16 +364,10 @@ async def discover_and_extract_jobs(
                     continue
                 seen_ids.add(job_id)
 
-                # Skip jobs marked as "Viewed" if the setting is enabled
-                if skip_viewed:
-                    viewed_indicator = await card.query_selector(
-                        "span:has-text('Viewed'), "
-                        "li[class*='viewed'], "
-                        "span[class*='job-card-container__footer-item']:has-text('Viewed')"
-                    )
-                    if viewed_indicator:
-                        logger.debug("discovery_skipped_viewed", job_id=job_id)
-                        continue
+                # Cross-run dedup: skip jobs already discovered in recent runs
+                if known_job_ids and job_id in known_job_ids:
+                    logger.debug("discovery_skipped_known_job", job_id=job_id)
+                    continue
 
                 # Click the card to load the description in the right panel
                 await card.click()

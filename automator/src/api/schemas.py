@@ -236,6 +236,7 @@ class JobRecordOut(BaseModel):
     error_message: str | None = None
     queue_reason: str | None = None
     application_notes: str | None = None
+    run_id: str | None = None
     discovered_at: str
     extracted_at: str | None = None
     scored_at: str | None = None
