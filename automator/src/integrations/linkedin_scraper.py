@@ -27,6 +27,121 @@ async def _human_delay(min_seconds: float, max_seconds: float) -> None:
     await asyncio.sleep(delay)
 
 
+async def _extract_external_url(page: Page, job_id: str) -> str | None:
+    """Extract the external apply URL from the LinkedIn job detail panel.
+
+    LinkedIn renders external apply buttons in several ways:
+    1. An <a> element with class 'jobs-apply-button' (older variant)
+    2. A <button> that opens a new tab with a LinkedIn redirect URL
+    3. A <button> wrapping an <a> with the external href
+
+    For case 2, we click the button, intercept the popup, grab its URL,
+    and close it. The popup URL is typically a LinkedIn redirect that
+    resolves to the actual ATS URL.
+
+    Args:
+        page: The Playwright page showing the job detail panel.
+        job_id: The LinkedIn job ID for logging.
+
+    Returns:
+        The external URL if found, or None.
+    """
+    # Strategy 1: Direct <a> element with href (older LinkedIn variant)
+    a_selectors = [
+        "a[class*='jobs-apply-button']",
+        "a[data-tracking-control-name*='apply']",
+        "a.jobs-apply-button--top-card",
+    ]
+    for selector in a_selectors:
+        try:
+            el = await page.query_selector(selector)
+            if el:
+                href = await el.get_attribute("href")
+                if href and "linkedin.com" not in href:
+                    logger.debug("external_url_from_link", job_id=job_id, url=href[:100])
+                    return href
+                elif href and "/jobs/view/" in href and "/apply" in href:
+                    # LinkedIn redirect URL — still useful, will redirect to ATS
+                    logger.debug("external_url_linkedin_redirect", job_id=job_id, url=href[:100])
+                    return href
+        except Exception:
+            continue
+
+    # Strategy 2: Click the Apply button and intercept the popup/new tab
+    apply_btn_selectors = [
+        "button[class*='jobs-apply-button']",
+        "button[aria-label='Apply']",
+        "button:has-text('Apply')",
+    ]
+
+    apply_btn = None
+    for selector in apply_btn_selectors:
+        try:
+            btn = await page.query_selector(selector)
+            if btn:
+                is_visible = await btn.is_visible()
+                if is_visible:
+                    # Make sure this isn't the Easy Apply button
+                    btn_text = (await btn.inner_text()).strip().lower()
+                    if "easy apply" not in btn_text:
+                        apply_btn = btn
+                        break
+        except Exception:
+            continue
+
+    if apply_btn is None:
+        logger.debug("external_url_no_apply_button", job_id=job_id)
+        return None
+
+    # Click and intercept the popup
+    try:
+        async with page.context.expect_page(timeout=5000) as new_page_info:
+            await apply_btn.click()
+
+        new_page = await new_page_info.value
+        external_url = new_page.url
+
+        # Wait briefly for any redirect to settle
+        try:
+            await new_page.wait_for_load_state("domcontentloaded", timeout=5000)
+            external_url = new_page.url  # May have redirected
+        except Exception:
+            pass  # Timeout is fine — we already have the URL
+
+        await new_page.close()
+
+        if external_url and "linkedin.com" not in external_url:
+            logger.debug("external_url_from_popup", job_id=job_id, url=external_url[:100])
+            return external_url
+        elif external_url:
+            # It's a LinkedIn redirect — still return it, the apply stage
+            # will follow the redirect when navigating
+            logger.debug(
+                "external_url_linkedin_redirect_popup",
+                job_id=job_id,
+                url=external_url[:100],
+            )
+            return external_url
+
+    except Exception as exc:
+        # Popup didn't open — button might navigate the current page or do nothing
+        logger.debug("external_url_popup_failed", job_id=job_id, error=str(exc))
+
+        # Strategy 3: Check if the button has a data attribute with the URL
+        try:
+            href = await apply_btn.get_attribute("href")
+            if href:
+                return href
+            # Some LinkedIn variants put the URL in a data attribute
+            data_url = await apply_btn.get_attribute("data-job-apply-url")
+            if data_url:
+                return data_url
+        except Exception:
+            pass
+
+    return None
+
+
 # Backoff delays (in seconds) for job description extraction retries.
 _EXTRACTION_BACKOFF_DELAYS: list[int] = [5, 15, 30]
 
@@ -343,13 +458,7 @@ async def discover_and_extract_jobs(
 
                 # Try to extract external URL from the Apply button's link
                 if apply_type == "external_apply":
-                    ext_link = await page.query_selector(
-                        "a[class*='jobs-apply-button'], "
-                        "a[data-tracking-control-name*='apply'], "
-                        "a.jobs-apply-button--top-card"
-                    )
-                    if ext_link:
-                        external_url = await ext_link.get_attribute("href")
+                    external_url = await _extract_external_url(page, job_id)
 
                 all_discovered.append(
                     DiscoveredJob(
