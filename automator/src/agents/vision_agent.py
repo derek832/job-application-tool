@@ -25,7 +25,7 @@ from src.db.models import ExternalApplyLog, JobRecord
 
 logger = structlog.get_logger()
 
-MAX_FORM_PAGES = 3
+MAX_FORM_PAGES = 10
 MAX_FIELD_LENGTH = 500
 
 # SQL injection patterns to reject (case-insensitive)
@@ -380,6 +380,9 @@ async def process_external_apply(
     # Click through to the actual form (ATS landing pages)
     await _click_through_to_form(page, log)
 
+    # Wait for the page to fully render after click-through
+    await asyncio.sleep(2)
+
     # Detect if we're on a login/registration page instead of the application form
     from src.agents.ats_registration import (
         _extract_domain,
@@ -394,6 +397,7 @@ async def process_external_apply(
 
     page_text = await page.inner_text("body")
     page_type = detect_page_type(page_text, url=page.url)
+    log.debug("page_type_detected", page_type=page_type, url=page.url[:100])
 
     # Check if the auth form is in an iframe (some ATS sites like iCIMS put
     # the login/registration form in an iframe while the main frame shows only
@@ -616,21 +620,107 @@ async def process_external_apply(
         log.info("fields_filled", filled=filled_count, total=len(fill_plan), page=page_count)
         total_filled_count += filled_count
 
+        # Handle radio buttons and custom dropdowns that _build_fill_plan can't handle
+        # Use page text to detect common questions and answer them directly
+        page_text_current = await page.inner_text("body")
+        page_text_lower = page_text_current.lower()
+
+        # Handle "Have you previously worked for [company]?" radio → click "No"
+        if "previously worked" in page_text_lower or "currently working for" in page_text_lower:
+            try:
+                # Find the "No" radio label and click it
+                no_label = await page.query_selector("label:has-text('No')")
+                if no_label:
+                    is_visible = await no_label.is_visible()
+                    if is_visible:
+                        await no_label.click()
+                        log.debug("radio_clicked", label="No (previously worked)")
+                        total_filled_count += 1
+                        await asyncio.sleep(0.5)
+            except Exception as exc:
+                log.debug("radio_click_failed", error=str(exc))
+
+        # Handle "How Did You Hear About Us?" dropdown
+        if "how did you hear about us" in page_text_lower or "0 items selected" in page_text_lower:
+            try:
+                # Workday uses custom multi-select dropdown components
+                # The trigger shows "0 items selected" text
+                dropdown = await page.query_selector(
+                    "button:has-text('0 items selected'), "
+                    "[data-automation-id='multiselectInputContainer'], "
+                    "[data-automation-id='sourceDropdown']"
+                )
+                if not dropdown:
+                    # Try finding any clickable element near "How Did You Hear"
+                    # Workday renders this as a div/button with "0 items selected"
+                    dropdown = await page.locator("text=0 items selected").first.element_handle()
+                if dropdown:
+                    is_visible = await dropdown.is_visible()
+                    if is_visible:
+                        await dropdown.click()
+                        await asyncio.sleep(1)
+                        # Select a common option
+                        option = await page.query_selector(
+                            "[role='option']:has-text('Other'), "
+                            "[role='option']:has-text('Job Board'), "
+                            "[role='option']:has-text('Internet'), "
+                            "li:has-text('Other'), "
+                            "li:has-text('Job Board'), "
+                            "div[role='option']"
+                        )
+                        if option:
+                            await option.click()
+                            log.debug("dropdown_selected", label="How Did You Hear About Us")
+                            total_filled_count += 1
+                            await asyncio.sleep(1)
+                        else:
+                            # Just click the first available option
+                            first_option = await page.query_selector("[role='option']")
+                            if first_option:
+                                await first_option.click()
+                                log.debug("dropdown_selected_first", label="How Did You Hear About Us")
+                                total_filled_count += 1
+                                await asyncio.sleep(1)
+                            else:
+                                log.debug("dropdown_no_option_found", label="How Did You Hear About Us")
+                else:
+                    log.debug("dropdown_trigger_not_found", label="How Did You Hear About Us")
+            except Exception as exc:
+                log.debug("dropdown_fill_failed", label="How Did You Hear About Us", error=str(exc))
+
         # Check for Next/Continue button (multi-page form)
         next_button = await page.query_selector(
             "button:has-text('Next'), button:has-text('Continue'), "
+            "button:has-text('Save and Continue'), "
             "input[type='submit'][value*='Next'], input[type='submit'][value*='Continue']"
         )
 
         if next_button:
             is_visible = await next_button.is_visible()
             if is_visible:
+                # Record current URL to detect if page actually advances
+                url_before = page.url
                 log.info("advancing_to_next_page", current_page=page_count)
                 await next_button.click()
                 await page.wait_for_load_state("domcontentloaded", timeout=15000)
-                import asyncio
 
                 await asyncio.sleep(2)
+
+                # Check if the page actually changed (URL or content)
+                url_after = page.url
+                if url_before == url_after:
+                    # URL didn't change — check if form validation prevented advancement
+                    # by looking for error messages or checking if fields are the same
+                    new_fields = await _extract_dom_fields(page)
+                    new_field_ids = {f.get("id", "") + f.get("name", "") for f in new_fields}
+                    old_field_ids = {f.get("id", "") + f.get("name", "") for f in dom_fields}
+                    if new_field_ids == old_field_ids:
+                        log.info(
+                            "page_stuck_validation_errors",
+                            page=page_count,
+                            hint="Required fields likely unfilled",
+                        )
+                        break  # Form is stuck, exit the loop
                 continue
 
         # No next button — look for submit
