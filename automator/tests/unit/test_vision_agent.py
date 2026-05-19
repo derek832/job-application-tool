@@ -246,7 +246,7 @@ class TestProcessExternalApply:
     @pytest.fixture
     def mock_page(self) -> AsyncMock:
         page = AsyncMock(
-            spec=["goto", "screenshot", "fill", "query_selector", "wait_for_load_state", "inner_text", "evaluate", "select_option", "keyboard"]
+            spec=["goto", "screenshot", "fill", "query_selector", "wait_for_load_state", "inner_text", "evaluate", "select_option", "keyboard", "url", "frames", "wait_for_timeout", "locator", "query_selector_all", "wait_for_selector"]
         )
         page.goto = AsyncMock()
         page.screenshot = AsyncMock(return_value=b"fake_screenshot_bytes")
@@ -256,6 +256,10 @@ class TestProcessExternalApply:
         page.evaluate = AsyncMock(return_value=[])
         page.select_option = AsyncMock()
         page.keyboard = AsyncMock()
+        page.url = "https://acme.com/apply/12345"
+        page.frames = [page]  # Single frame (main page only)
+        page.wait_for_timeout = AsyncMock()
+        page.query_selector_all = AsyncMock(return_value=[])
 
         # Default query_selector: returns a submit button for submit selectors, None for next button
         submit_btn = AsyncMock()
@@ -438,6 +442,22 @@ class TestProcessExternalApply:
         next_btn.is_visible = AsyncMock(return_value=True)
         # Always return a button (simulates infinite next pages)
         mock_page.query_selector = AsyncMock(return_value=next_btn)
+
+        # Simulate URL changing on each page (so stuck-page detection doesn't trigger)
+        page_counter = {"n": 0}
+        original_url = "https://acme.com/apply/12345"
+
+        @property
+        def dynamic_url(self):
+            return f"{original_url}?page={page_counter['n']}"
+
+        # Use a side_effect on wait_for_load_state to increment the page counter
+        # (simulates the URL changing after each Next click)
+        async def advance_page(*args, **kwargs):
+            page_counter["n"] += 1
+            mock_page.url = f"{original_url}?page={page_counter['n']}"
+
+        mock_page.wait_for_load_state = AsyncMock(side_effect=advance_page)
 
         result = await process_external_apply(
             job_record=job_record,

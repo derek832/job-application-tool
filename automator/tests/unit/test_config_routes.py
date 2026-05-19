@@ -97,7 +97,7 @@ class TestSearchConfig:
 
         get_resp = await client.get("/config/search")
         assert get_resp.status_code == 200
-        expected = {**payload, "search_queries": []}
+        expected = {**payload, "search_queries": [], "time_range": None, "sort_by": None}
         assert get_resp.json() == expected
 
     @pytest.mark.asyncio
