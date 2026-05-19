@@ -205,9 +205,19 @@ async def discover_and_extract_jobs(
 
     # Zoom out to 33% so the entire job list panel is visible without scrolling.
     # This ensures all cards are rendered and clickable, and pagination buttons
-    # are visible in the viewport.
-    await page.evaluate("document.body.style.zoom = '0.33'")
-    await _human_delay(1.0, 2.0)
+    # are visible in the viewport. Uses CDP command for reliable zoom.
+    try:
+        cdp_session = await page.context.new_cdp_session(page)
+        await cdp_session.send("Emulation.setPageScaleFactor", {"pageScaleFactor": 0.33})
+        await _human_delay(1.0, 2.0)
+    except Exception as zoom_exc:
+        logger.warning("zoom_failed_falling_back", error=str(zoom_exc)[:100])
+        # Fallback: try CSS transform
+        await page.evaluate(
+            "document.body.style.transform = 'scale(0.33)';"
+            "document.body.style.transformOrigin = 'top left';"
+        )
+        await _human_delay(1.0, 2.0)
 
     all_discovered: list[DiscoveredJob] = []
     seen_ids: set[str] = set()
