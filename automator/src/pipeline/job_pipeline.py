@@ -114,14 +114,28 @@ async def run_pipeline(session: AsyncSession | None = None) -> None:
         return
 
     # Step 3: Load all configuration
-    search_config_raw = await get_config(session, "search_config")
-    user_profile_raw = await get_config(session, "user_profile")
-    settings_raw = await get_config(session, "settings")
+    try:
+        search_config_raw = await get_config(session, "search_config")
+        user_profile_raw = await get_config(session, "user_profile")
+        settings_raw = await get_config(session, "settings")
 
-    goals_profile = GoalsProfile.model_validate(goals_profile_raw)
-    search_config = SearchConfig.model_validate(search_config_raw or {})
-    user_profile = UserProfile.model_validate(user_profile_raw or {})
-    settings = Settings.model_validate(settings_raw or {})
+        goals_profile = GoalsProfile.model_validate(goals_profile_raw)
+        search_config = SearchConfig.model_validate(search_config_raw or {})
+        user_profile = UserProfile.model_validate(user_profile_raw or {})
+        settings = Settings.model_validate(settings_raw or {})
+    except Exception as config_exc:
+        logger.error("pipeline_config_load_failed", error=str(config_exc))
+        await set_config(
+            session,
+            "system_state",
+            {
+                "status": "idle",
+                "last_error": f"Config load failed: {config_exc}",
+                "last_run_at": datetime.now(UTC).isoformat(),
+            },
+        )
+        await session.commit()
+        return
 
     # Build unified notification settings (ntfy only — SMS deprecated)
     notification_settings = await _build_notification_settings(session, settings)
@@ -340,6 +354,10 @@ async def run_pipeline(session: AsyncSession | None = None) -> None:
 
             await session.flush()
 
+            # Commit discovery results so they're saved even if scoring crashes
+            await session.commit()
+            logger.info("pipeline_discovery_committed")
+
             # Step 7.5: Blacklist filtering — check extracted jobs before scoring
             from src.db.blacklist_repo import build_blacklist_config, get_all_entries
             from src.db.blacklist_repo import increment_hit_count as _increment_hit_count
@@ -485,16 +503,24 @@ async def run_pipeline(session: AsyncSession | None = None) -> None:
                             job_id=job_record.id,
                             new_status=job_record.status,
                         )
-                    except Exception as exc:
+                    except Exception as scoring_exc:
                         logger.error(
                             "pipeline_scoring_error",
                             job_id=job_record.id,
-                            error=str(exc),
+                            error=str(scoring_exc),
                         )
+                        # Rollback to recover session from any partial writes
+                        try:
+                            await session.rollback()
+                        except Exception:
+                            pass
             else:
                 logger.warning("pipeline_scoring_skipped_no_claude_client")
 
             await session.flush()
+            # Commit scoring results so they're saved even if tailoring crashes
+            await session.commit()
+            logger.info("pipeline_scoring_committed")
         else:
             logger.info("pipeline_discovery_and_scoring_skipped")
 
@@ -648,6 +674,11 @@ async def run_pipeline(session: AsyncSession | None = None) -> None:
                         job_id=job_record.id,
                         error=str(exc),
                     )
+                    # Rollback to recover session from any partial writes
+                    try:
+                        await session.rollback()
+                    except Exception:
+                        pass
                     # Still attempt to restore resume on error
                     try:
                         await restore_resume_base(
