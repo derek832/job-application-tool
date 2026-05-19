@@ -12,7 +12,7 @@ from datetime import UTC, datetime
 from urllib.parse import urlparse
 
 import structlog
-from playwright.async_api import Page
+from playwright.async_api import Frame, Page
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -115,36 +115,107 @@ async def store_account(
     return account
 
 
-def detect_page_type(page_text: str) -> str:
+def detect_page_type(page_text: str, url: str = "") -> str:
     """Detect whether the current page is a login, registration, or application form.
+
+    Uses contextual analysis to avoid false positives from navigation elements.
+    A page with job application content (Apply buttons, job descriptions) is
+    classified as 'form' even if "Sign In" appears in the navigation bar.
 
     Args:
         page_text: The visible text content of the page.
+        url: Optional page URL for additional signal (e.g., /login in path).
 
     Returns:
         One of: 'registration', 'login', 'google_oauth', 'form'
     """
     lower = page_text.lower()
 
+    # If the page has strong application/job indicators, it's a form page
+    # regardless of nav elements like "Sign In"
+    _APPLICATION_INDICATORS = [
+        "apply for this job",
+        "apply now",
+        "apply manually",
+        "start your application",
+        "submit application",
+        "autofill with resume",
+        "upload resume",
+        "upload your resume",
+        "use my last application",
+    ]
+    for indicator in _APPLICATION_INDICATORS:
+        if indicator in lower:
+            return "form"
+
     # Check for Google OAuth first (highest priority — easiest path)
     for indicator in _GOOGLE_OAUTH_INDICATORS:
         if indicator in lower:
             return "google_oauth"
 
-    # Check for registration page
+    # Check for registration page — require stronger signals
+    # "register" alone is too broad (e.g., "register for updates")
+    # Look for registration-specific context
     for indicator in _REGISTRATION_INDICATORS:
         if indicator in lower:
-            return "registration"
+            # Verify it's actually a registration page by checking for
+            # password/email fields context nearby
+            if any(
+                ctx in lower
+                for ctx in ["password", "confirm password", "email address", "create your"]
+            ):
+                return "registration"
+            # If "create account" or "sign up" appears prominently (not just in nav),
+            # check that it's not just a nav link by looking for form context
+            if indicator in ("create an account", "create account", "sign up"):
+                return "registration"
 
-    # Check for login page
+    # Check for login page — require password field context to avoid
+    # false positives from "Sign In" navigation buttons
+    login_found = False
     for indicator in _LOGIN_INDICATORS:
         if indicator in lower:
+            login_found = True
+            break
+
+    if login_found:
+        # Only classify as login if there's evidence of a login FORM
+        # (password field, email field, or the page is primarily about signing in)
+        login_form_indicators = [
+            "password",
+            "forgot password",
+            "reset password",
+            "remember me",
+            "enter your email",
+            "enter your credentials",
+            "username",
+        ]
+        for form_indicator in login_form_indicators:
+            if form_indicator in lower:
+                return "login"
+
+        # If "sign in" appears but no form indicators, it's likely just a nav button
+        # Check if the page has substantial content (job description, etc.)
+        if len(lower) > 500:
+            # Long page with "sign in" but no password fields = likely a job page
+            # with a nav "Sign In" button
+            return "form"
+        else:
+            # Short page with login indicators = likely a login page
+            return "login"
+
+    # Fall back to URL pattern detection when text analysis is inconclusive
+    if url:
+        url_lower = url.lower()
+        if "/register" in url_lower or "/signup" in url_lower or "/create-account" in url_lower:
+            return "registration"
+        if "/login" in url_lower or "/signin" in url_lower:
             return "login"
 
     return "form"
 
 
-async def handle_google_oauth(page: Page) -> bool:
+async def handle_google_oauth(page: Page | Frame) -> bool:
     """Click the 'Sign in with Google' button.
 
     Since the user is already logged into Google in their Chrome session,
@@ -183,7 +254,7 @@ async def handle_google_oauth(page: Page) -> bool:
 
 
 async def handle_registration(
-    page: Page,
+    page: Page | Frame,
     email: str,
     full_name: str | None = None,
 ) -> tuple[bool, str | None]:
@@ -242,6 +313,38 @@ async def handle_registration(
         logger.warning("registration_no_fields_filled")
         return False, None
 
+    # Check any consent/privacy/terms checkboxes (required for many ATS sites)
+    consent_keywords = ["consent", "privacy", "terms", "agree", "accept", "i have read"]
+    try:
+        checkboxes = await page.query_selector_all("input[type='checkbox']")
+        for checkbox in checkboxes:
+            try:
+                is_checked = await checkbox.is_checked()
+                if is_checked:
+                    continue
+                # Check if this checkbox is related to consent/privacy
+                label_el = None
+                cb_id = await checkbox.get_attribute("id")
+                if cb_id:
+                    label_el = await page.query_selector(f"label[for='{cb_id}']")
+                if not label_el:
+                    label_el = await checkbox.evaluate_handle(
+                        "el => el.closest('label')"
+                    )
+                label_text = ""
+                if label_el:
+                    label_text = await label_el.inner_text()
+                label_lower = label_text.lower()
+                cb_name = (await checkbox.get_attribute("name") or "").lower()
+
+                if any(kw in label_lower or kw in cb_name for kw in consent_keywords):
+                    await checkbox.check()
+                    logger.debug("registration_checkbox_checked", label=label_text[:50])
+            except Exception:
+                continue
+    except Exception:
+        pass
+
     # Submit the registration form
     submit_selectors = [
         "button[type='submit']",
@@ -269,7 +372,7 @@ async def handle_registration(
 
 
 async def handle_login(
-    page: Page,
+    page: Page | Frame,
     email: str,
     password: str,
 ) -> bool:
