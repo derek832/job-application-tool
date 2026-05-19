@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 
 import structlog
-from playwright.async_api import Page
+from playwright.async_api import Frame, Page
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.agents.claude_client import ClaudeClient, FormField
@@ -393,12 +393,40 @@ async def process_external_apply(
     )
 
     page_text = await page.inner_text("body")
-    page_type = detect_page_type(page_text)
+    page_type = detect_page_type(page_text, url=page.url)
+
+    # If main frame text doesn't indicate login/registration, check URL pattern
+    # and iframe content (some ATS sites like iCIMS put the form in an iframe)
+    auth_frame = None  # Track which frame has the auth form (None = main page)
+    if page_type == "form":
+        current_url = page.url.lower()
+        if "/login" in current_url or "/register" in current_url or "/signup" in current_url:
+            # URL indicates auth page — check iframes for the actual form
+            for frame in page.frames[1:]:
+                try:
+                    frame_text = await frame.inner_text("body")
+                    frame_page_type = detect_page_type(frame_text, url=frame.url)
+                    if frame_page_type != "form":
+                        page_type = frame_page_type
+                        page_text = frame_text
+                        auth_frame = frame
+                        log.info(
+                            "detected_auth_in_iframe",
+                            page_type=page_type,
+                            frame_url=frame.url[:100],
+                        )
+                        break
+                except Exception:
+                    continue
+
     domain = _extract_domain(job_record.external_url or "")
+
+    # Use the auth frame if the form is in an iframe, otherwise use the main page
+    auth_target = auth_frame if auth_frame is not None else page
 
     if page_type == "google_oauth":
         log.info("detected_google_oauth", domain=domain)
-        success = await handle_google_oauth(page)
+        success = await handle_google_oauth(auth_target)
         if not success:
             return Result(ok=False, error="Google OAuth flow failed", reason="oauth_failed")
         if session:
@@ -409,9 +437,9 @@ async def process_external_apply(
         stored = await get_stored_account(session, domain, profile.email)
         if stored and stored.password:
             log.info("using_stored_credentials", domain=domain)
-            await handle_login(page, stored.email, stored.password)
+            await handle_login(auth_target, stored.email, stored.password)
         elif stored and stored.auth_method == "google_oauth":
-            await handle_google_oauth(page)
+            await handle_google_oauth(auth_target)
         else:
             log.warning("no_stored_credentials", domain=domain)
             return Result(
@@ -422,7 +450,7 @@ async def process_external_apply(
 
     elif page_type == "registration" and profile.email:
         log.info("detected_registration_page", domain=domain)
-        success, password = await handle_registration(page, profile.email, profile.full_name)
+        success, password = await handle_registration(auth_target, profile.email, profile.full_name)
         if success and password and session:
             await store_account(
                 session, domain, profile.email, password, "password", "auto-registered"
@@ -452,6 +480,11 @@ async def process_external_apply(
     total_dom_fields_found = 0
     total_filled_count = 0
     filled_details: list[dict[str, str]] = []
+
+    # After auth (OAuth/login/registration), we may be back on an intermediate
+    # page (e.g., Workday's "Start Your Application" page). Click through again.
+    if page_type in ("google_oauth", "login", "registration"):
+        await _click_through_to_form(page, log)
 
     while True:
         page_count += 1
@@ -700,14 +733,14 @@ async def process_external_apply(
 # ---------------------------------------------------------------------------
 
 
-async def _extract_dom_fields(page: Page) -> list[dict]:
+async def _extract_dom_fields(page: Page | Frame) -> list[dict]:
     """Extract all form input fields from the page DOM.
 
     Finds all visible input, select, and textarea elements and extracts
     their label, type, id, name, and a working CSS selector.
 
     Args:
-        page: The Playwright page.
+        page: The Playwright page or frame.
 
     Returns:
         List of dicts with keys: label, type, selector, id, name, tag.
@@ -825,6 +858,10 @@ def _build_fill_plan(
         ("state", "state"),
         ("zip", "zip"),
         ("postal", "zip"),
+        ("work auth", "work_auth"),
+        ("authorized to work", "work_auth"),
+        ("legally authorized", "work_auth"),
+        ("authorized", "work_auth"),
         ("country", "country"),
         ("address", "location"),
         ("location", "location"),
@@ -832,9 +869,6 @@ def _build_fill_plan(
         ("website", "website"),
         ("portfolio", "website"),
         ("blog", "website"),
-        ("work auth", "work_auth"),
-        ("authorized", "work_auth"),
-        ("legally auth", "work_auth"),
         ("salary", "salary"),
         ("desired pay", "salary"),
         ("compensation", "salary"),
@@ -842,6 +876,7 @@ def _build_fill_plan(
         ("start date", "date_available"),
         ("when can you start", "date_available"),
         ("earliest start", "date_available"),
+        ("notice period", "date_available"),
     ]
 
     fill_plan: list[dict] = []
@@ -979,6 +1014,10 @@ async def _click_through_to_form(page: Page, log) -> None:
     description first with an "Apply" or "Apply for this Job" button that
     leads to the actual form. This function detects and clicks that button.
 
+    For Workday specifically, there's often a two-step flow:
+    1. Click "Apply" on the job description page
+    2. Click "Apply Manually" on the application method selection page
+
     If no apply button is found, assumes we're already on the form.
 
     Args:
@@ -986,9 +1025,11 @@ async def _click_through_to_form(page: Page, log) -> None:
         log: Bound structlog logger.
     """
 
-    await asyncio.sleep(2)  # Let the page render
+    await asyncio.sleep(3)  # Let the page render (Workday SPAs need extra time)
 
     apply_selectors = [
+        "a[data-automation-id='adventureButton']",  # Workday-specific
+        "a[href*='/apply']",  # Generic apply link
         "a:has-text('Apply for this Job')",
         "a:has-text('Apply Now')",
         "a:has-text('Apply for this Position')",
@@ -1001,6 +1042,7 @@ async def _click_through_to_form(page: Page, log) -> None:
         "button[class*='apply'], button[id*='apply']",
     ]
 
+    clicked = False
     for selector in apply_selectors:
         try:
             btn = await page.query_selector(selector)
@@ -1010,9 +1052,36 @@ async def _click_through_to_form(page: Page, log) -> None:
                     log.info("clicking_apply_button", selector=selector)
                     await btn.click()
                     await page.wait_for_load_state("domcontentloaded", timeout=15000)
-                    await asyncio.sleep(2)  # Let the form render
-                    return
+                    await asyncio.sleep(3)  # Let the next page render
+                    clicked = True
+                    break
         except Exception:
             continue
 
-    log.debug("no_apply_landing_page_detected")
+    if not clicked:
+        log.debug("no_apply_landing_page_detected")
+        return
+
+    # Workday multi-step: after clicking Apply, there may be an intermediate
+    # page asking how to apply (Autofill with Resume, Apply Manually, etc.)
+    apply_method_selectors = [
+        "a:has-text('Apply Manually')",
+        "button:has-text('Apply Manually')",
+        "[data-automation-id='applyManually']",
+        "a:has-text('Apply manually')",
+        "button:has-text('Apply manually')",
+    ]
+
+    for selector in apply_method_selectors:
+        try:
+            btn = await page.query_selector(selector)
+            if btn:
+                is_visible = await btn.is_visible()
+                if is_visible:
+                    log.info("clicking_apply_manually", selector=selector)
+                    await btn.click()
+                    await page.wait_for_load_state("domcontentloaded", timeout=15000)
+                    await asyncio.sleep(3)  # Let the form render
+                    return
+        except Exception:
+            continue
