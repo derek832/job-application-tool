@@ -285,7 +285,33 @@ async def run_pipeline(session: AsyncSession | None = None) -> None:
             logger.info("pipeline_discovery_completed", new_jobs=len(discovered))
 
             # Create JobRecords with title, company, and description already populated
+            # First, check which jobs already exist to avoid IntegrityError
+            existing_ids: set[str] = set()
             for job in discovered:
+                result = await session.execute(
+                    select(JobRecord.id).where(JobRecord.id == job.job_id)
+                )
+                if result.scalar_one_or_none() is not None:
+                    existing_ids.add(job.job_id)
+
+            new_count = 0
+            for job in discovered:
+                if job.job_id in existing_ids:
+                    # Job already exists — update external_url if we now have one
+                    if job.external_url:
+                        result = await session.execute(
+                            select(JobRecord).where(JobRecord.id == job.job_id)
+                        )
+                        record = result.scalar_one_or_none()
+                        if record and not record.external_url:
+                            record.external_url = job.external_url
+                            logger.debug(
+                                "pipeline_existing_job_url_updated",
+                                job_id=job.job_id,
+                                external_url=job.external_url[:80],
+                            )
+                    continue
+
                 try:
                     await create_job_record(
                         session,
@@ -309,19 +335,29 @@ async def run_pipeline(session: AsyncSession | None = None) -> None:
                         if job.external_url:
                             record.external_url = job.external_url
 
+                    new_count += 1
                     logger.info(
-                        "pipeline_job_discovered_and_extracted",
+                        "job_record_created",
                         job_id=job.job_id,
                         title=job.title,
                         company=job.company,
                         apply_type=job.apply_type,
                     )
                 except Exception as exc:
+                    # Rollback to savepoint to keep session usable
+                    await session.rollback()
                     logger.error(
                         "pipeline_job_record_creation_failed",
                         job_id=job.job_id,
                         error=str(exc),
                     )
+
+            logger.info(
+                "pipeline_jobs_persisted",
+                new=new_count,
+                skipped_existing=len(existing_ids),
+                total_discovered=len(discovered),
+            )
 
             await session.flush()
 
