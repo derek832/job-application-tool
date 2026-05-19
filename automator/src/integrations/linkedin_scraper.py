@@ -101,14 +101,18 @@ async def _extract_external_url(page: Page, job_id: str) -> str | None:
         new_page = await new_page_info.value
         external_url = new_page.url
 
-        # Wait briefly for any redirect to settle
         try:
+            # Wait briefly for any redirect to settle
             await new_page.wait_for_load_state("domcontentloaded", timeout=5000)
             external_url = new_page.url  # May have redirected
         except Exception:
             pass  # Timeout is fine — we already have the URL
-
-        await new_page.close()
+        finally:
+            # Always close the tab, even if load_state threw or the page errored
+            try:
+                await new_page.close()
+            except Exception:
+                pass  # Page may already be closed or crashed
 
         if external_url and "linkedin.com" not in external_url:
             logger.debug("external_url_from_popup", job_id=job_id, url=external_url[:100])
