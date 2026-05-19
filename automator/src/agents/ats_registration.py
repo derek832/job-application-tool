@@ -7,11 +7,14 @@ and manages stored credentials for external ATS platforms.
 from __future__ import annotations
 
 import asyncio
+import base64
+import re
 import secrets
 from datetime import UTC, datetime
 from urllib.parse import urlparse
 
 import structlog
+from googleapiclient.discovery import build as build_google_service
 from playwright.async_api import Frame, Page
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -133,14 +136,14 @@ def detect_page_type(page_text: str, url: str = "") -> str:
 
     # If the page has strong application/job indicators, it's a form page
     # regardless of nav elements like "Sign In"
-    _APPLICATION_INDICATORS = [
+    application_indicators = [
         "apply for this job",
         "apply now",
         "submit application",
         "upload resume",
         "upload your resume",
     ]
-    for indicator in _APPLICATION_INDICATORS:
+    for indicator in application_indicators:
         if indicator in lower:
             return "form"
 
@@ -324,9 +327,7 @@ async def handle_registration(
                 if cb_id:
                     label_el = await page.query_selector(f"label[for='{cb_id}']")
                 if not label_el:
-                    label_el = await checkbox.evaluate_handle(
-                        "el => el.closest('label')"
-                    )
+                    label_el = await checkbox.evaluate_handle("el => el.closest('label')")
                 label_text = ""
                 if label_el:
                     label_text = await label_el.inner_text()
@@ -445,14 +446,12 @@ async def wait_for_verification_email(
     Returns:
         The verification URL if found, or None.
     """
-    from googleapiclient.discovery import build
-
     creds = load_credentials()
     if creds is None:
         logger.error("gmail_credentials_not_available")
         return None
 
-    service = build("gmail", "v1", credentials=creds, cache_discovery=False)
+    service = build_google_service("gmail", "v1", credentials=creds, cache_discovery=False)
 
     start_time = asyncio.get_event_loop().time()
     poll_interval = 5
@@ -473,9 +472,6 @@ async def wait_for_verification_email(
                 )
 
                 # Extract links from the email body
-                import base64
-                import re
-
                 payload = msg.get("payload", {})
                 body_data = ""
 
