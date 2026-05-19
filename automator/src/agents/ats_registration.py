@@ -136,13 +136,9 @@ def detect_page_type(page_text: str, url: str = "") -> str:
     _APPLICATION_INDICATORS = [
         "apply for this job",
         "apply now",
-        "apply manually",
-        "start your application",
         "submit application",
-        "autofill with resume",
         "upload resume",
         "upload your resume",
-        "use my last application",
     ]
     for indicator in _APPLICATION_INDICATORS:
         if indicator in lower:
