@@ -10,7 +10,9 @@ Retries once on submission failure before marking the job as apply_failed.
 
 from __future__ import annotations
 
+import tempfile
 from datetime import UTC, datetime
+from pathlib import Path
 
 import structlog
 from playwright.async_api import Page
@@ -32,9 +34,9 @@ ELEMENT_TIMEOUT_MS = 10_000
 
 # Standard Easy Apply field selectors (LinkedIn's form structure)
 EASY_APPLY_BUTTON_SELECTOR = (
-    'button.jobs-apply-button:not(.artdeco-pill):not(.search-reusables__filter-pill-button), '
-    'button#jobs-apply-button-id, '
-    'button[data-live-test-job-apply-button]'
+    "button.jobs-apply-button:not(.artdeco-pill):not(.search-reusables__filter-pill-button), "
+    "button#jobs-apply-button-id, "
+    "button[data-live-test-job-apply-button]"
 )
 SUBMIT_BUTTON_SELECTOR = 'button[aria-label="Submit application"]'
 NEXT_BUTTON_SELECTOR = 'button[aria-label="Continue to next step"]'
@@ -213,7 +215,7 @@ async def _execute_easy_apply(
         # Wait for the modal to appear
         await page.wait_for_selector(
             'div[role="dialog"], div.jobs-easy-apply-modal, '
-            'div.jobs-easy-apply-content, div[data-test-modal]',
+            "div.jobs-easy-apply-content, div[data-test-modal]",
             timeout=ELEMENT_TIMEOUT_MS,
         )
     except PlaywrightTimeout as exc:
@@ -610,9 +612,6 @@ async def _handle_cover_letter(
         logger.debug("easy_apply_cover_letter_filled_text", job_id=job_record.id)
     elif tag_name == "input" and input_type == "file":
         # Write cover letter to a temp file and upload
-        import tempfile
-        from pathlib import Path
-
         temp_path = Path(tempfile.gettempdir()) / f"cover_letter_{job_record.id}.txt"
         temp_path.write_text(cover_letter_text, encoding="utf-8")
         await cover_letter_field.set_input_files(str(temp_path))
