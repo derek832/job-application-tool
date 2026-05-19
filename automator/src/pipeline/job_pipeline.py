@@ -81,6 +81,9 @@ async def run_pipeline(session: AsyncSession | None = None) -> None:
 
     logger.info("pipeline_run_started")
 
+    # Generate a unique run_id for this pipeline execution
+    run_id = datetime.now(UTC).strftime("%Y%m%d_%H%M")
+
     # Step 1: Check system_state
     system_state = await get_config(session, "system_state")
     if system_state and system_state.get("status") == "paused":
@@ -245,6 +248,17 @@ async def run_pipeline(session: AsyncSession | None = None) -> None:
                 logger.warning("pipeline_no_search_queries_configured")
                 keyword_list = [""]  # Run once with no keywords as fallback
 
+            # Cross-run dedup: load job IDs discovered in the last 7 days
+            from sqlalchemy import text as sa_text
+
+            known_ids_result = await session.execute(
+                sa_text(
+                    "SELECT id FROM job_records WHERE discovered_at > datetime('now', '-7 days')"
+                )
+            )
+            known_job_ids: set[str] = {row[0] for row in known_ids_result.all()}
+            logger.info("pipeline_known_job_ids_loaded", count=len(known_job_ids))
+
             discovered: list = []
             for i, query_keywords in enumerate(keyword_list):
                 # Randomized delay between queries to avoid detection
@@ -268,7 +282,7 @@ async def run_pipeline(session: AsyncSession | None = None) -> None:
                     config=query_config,
                     session=session,
                     max_pages=5,
-                    skip_viewed=settings.skip_viewed_jobs,
+                    known_job_ids=known_job_ids,
                 )
                 discovered.extend(query_results)
                 logger.info(
@@ -332,6 +346,7 @@ async def run_pipeline(session: AsyncSession | None = None) -> None:
                         record.description_text = job.description
                         record.status = "extracted"
                         record.extracted_at = datetime.now(UTC).isoformat()
+                        record.run_id = run_id
                         if job.external_url:
                             record.external_url = job.external_url
 

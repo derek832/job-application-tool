@@ -33,6 +33,9 @@ router = APIRouter(prefix="/jobs", tags=["jobs"])
 async def list_job_records(
     status: str | None = Query(default=None, description="Filter by job status"),
     search: str | None = Query(default=None, description="Search job title or company"),
+    run_id: str | None = Query(default=None, description="Filter by run ID"),
+    min_score: int | None = Query(default=None, ge=0, le=100, description="Minimum fit score"),
+    max_score: int | None = Query(default=None, ge=0, le=100, description="Maximum fit score"),
     page: int = Query(default=1, ge=1, description="Page number (1-indexed)"),
     limit: int = Query(default=20, ge=1, le=100, description="Records per page"),
     session: AsyncSession = Depends(get_session),
@@ -44,6 +47,9 @@ async def list_job_records(
         status: If provided, filter to records matching this status.
         search: If provided, filter to records where job_title or company
             contains this substring (case-insensitive).
+        run_id: If provided, filter to records from this pipeline run.
+        min_score: If provided, filter to records with fit_score >= this value.
+        max_score: If provided, filter to records with fit_score <= this value.
         page: Page number (1-indexed). Defaults to 1.
         limit: Maximum records per page. Defaults to 20, max 100.
         session: Active async database session.
@@ -55,11 +61,23 @@ async def list_job_records(
         "list_jobs_requested",
         status=status,
         search=search,
+        run_id=run_id,
+        min_score=min_score,
+        max_score=max_score,
         page=page,
         limit=limit,
     )
 
-    records = await list_jobs(session, status=status, search=search, page=page, limit=limit)
+    records = await list_jobs(
+        session,
+        status=status,
+        search=search,
+        run_id=run_id,
+        min_score=min_score,
+        max_score=max_score,
+        page=page,
+        limit=limit,
+    )
     return [JobRecordOut.model_validate(record) for record in records]
 
 
