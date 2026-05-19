@@ -395,29 +395,37 @@ async def process_external_apply(
     page_text = await page.inner_text("body")
     page_type = detect_page_type(page_text, url=page.url)
 
-    # If main frame text doesn't indicate login/registration, check URL pattern
-    # and iframe content (some ATS sites like iCIMS put the form in an iframe)
+    # Check if the auth form is in an iframe (some ATS sites like iCIMS put
+    # the login/registration form in an iframe while the main frame shows only
+    # navigation/footer content)
     auth_frame = None  # Track which frame has the auth form (None = main page)
-    if page_type == "form":
-        current_url = page.url.lower()
-        if "/login" in current_url or "/register" in current_url or "/signup" in current_url:
-            # URL indicates auth page — check iframes for the actual form
-            for frame in page.frames[1:]:
-                try:
+    current_url = page.url.lower()
+    if "/login" in current_url or "/register" in current_url or "/signup" in current_url:
+        # URL indicates auth page — check iframes for the actual form
+        for frame in page.frames[1:]:
+            try:
+                frame_url = frame.url.lower()
+                # Skip tracking/captcha iframes
+                if "captcha" in frame_url or "tracking" in frame_url:
+                    continue
+                # Check if this iframe has the same base URL (auth form iframe)
+                if "/login" in frame_url or "/register" in frame_url or "/signup" in frame_url:
                     frame_text = await frame.inner_text("body")
-                    frame_page_type = detect_page_type(frame_text, url=frame.url)
-                    if frame_page_type != "form":
-                        page_type = frame_page_type
-                        page_text = frame_text
+                    if len(frame_text.strip()) > 30:
                         auth_frame = frame
+                        # Re-detect page type from iframe content
+                        frame_page_type = detect_page_type(frame_text, url=frame.url)
+                        if frame_page_type != "form":
+                            page_type = frame_page_type
+                        page_text = frame_text
                         log.info(
                             "detected_auth_in_iframe",
                             page_type=page_type,
                             frame_url=frame.url[:100],
                         )
                         break
-                except Exception:
-                    continue
+            except Exception:
+                continue
 
     domain = _extract_domain(job_record.external_url or "")
 
@@ -441,12 +449,23 @@ async def process_external_apply(
         elif stored and stored.auth_method == "google_oauth":
             await handle_google_oauth(auth_target)
         else:
-            log.warning("no_stored_credentials", domain=domain)
-            return Result(
-                ok=False,
-                error=f"Login required but no stored credentials for {domain}",
-                reason="login_required",
+            # No stored credentials — attempt registration on the same page
+            # Many ATS sites (like iCIMS) use a combined login/registration flow
+            log.info("no_stored_credentials_attempting_registration", domain=domain)
+            success, password = await handle_registration(
+                auth_target, profile.email, profile.full_name
             )
+            if success and password and session:
+                await store_account(
+                    session, domain, profile.email, password, "password", "auto-registered"
+                )
+            elif not success:
+                log.warning("no_stored_credentials", domain=domain)
+                return Result(
+                    ok=False,
+                    error=f"Login required but no stored credentials for {domain}",
+                    reason="login_required",
+                )
 
     elif page_type == "registration" and profile.email:
         log.info("detected_registration_page", domain=domain)
