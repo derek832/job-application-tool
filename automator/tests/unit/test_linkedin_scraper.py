@@ -35,7 +35,8 @@ class TestBuildSearchUrl:
         assert parsed.netloc == "www.linkedin.com"
         assert parsed.path == "/jobs/search/"
         assert params["f_TPR"] == ["r86400"]
-        assert len(params) == 1
+        assert params["sortBy"] == ["DD"]
+        assert len(params) == 2
 
     def test_keywords_included(self) -> None:
         config = SearchConfig(keywords="python developer")
@@ -153,7 +154,8 @@ class TestBuildSearchUrl:
         assert params["f_E"] == ["4"]
         assert params["f_WT"] == ["2"]
         assert params["f_TPR"] == ["r86400"]
-        assert len(params) == 6
+        assert params["sortBy"] == ["DD"]
+        assert len(params) == 7
 
     def test_case_insensitive_job_type(self) -> None:
         config = SearchConfig(job_type="Full-Time")

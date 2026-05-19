@@ -62,7 +62,7 @@ def build_search_url(config: SearchConfig) -> str:
     """Build a LinkedIn job search URL from the given search configuration.
 
     Maps all non-None SearchConfig fields to their corresponding LinkedIn query
-    parameters and always includes the 24-hour recency filter (f_TPR=r86400).
+    parameters. Uses the time_range from config (defaults to 1 day = r86400).
 
     Args:
         config: The search configuration containing keywords, location, job type,
@@ -94,8 +94,23 @@ def build_search_url(config: SearchConfig) -> str:
         if mapped is not None:
             params["f_WT"] = mapped
 
-    # Always include 24-hour recency filter
-    params["f_TPR"] = "r86400"
+    # Time range filter — value is number of days (as string), "0" = any time
+    time_range = config.time_range or "1"
+    legacy_map = {"24h": "1", "48h": "2", "week": "7", "month": "30", "any": "0"}
+    time_range = legacy_map.get(time_range, time_range)
+    try:
+        days = int(time_range)
+    except ValueError:
+        days = 1  # Default to 1 day
+    if days > 0:
+        params["f_TPR"] = f"r{days * 86400}"
+    # days == 0 means "any time" — no f_TPR parameter
+
+    # Sort order
+    sort_by = config.sort_by or "recent"
+    if sort_by == "recent":
+        params["sortBy"] = "DD"
+    # "relevant" = no sortBy parameter (LinkedIn default)
 
     return f"{_LINKEDIN_SEARCH_BASE}?{urlencode(params)}"
 
@@ -443,7 +458,8 @@ async def _extract_job_ids_from_page(page: Page) -> set[str]:
 async def _go_to_next_page(page: Page) -> bool:
     """Attempt to navigate to the next page of search results.
 
-    Looks for a pagination button or link that advances to the next page.
+    Scrolls to the bottom of the page first to ensure pagination controls
+    are rendered/visible, then looks for a Next button or link.
     Returns True if navigation succeeded, False if no next page is available.
 
     Args:
@@ -452,24 +468,74 @@ async def _go_to_next_page(page: Page) -> bool:
     Returns:
         True if the page navigated to the next results page, False otherwise.
     """
-    # LinkedIn uses an aria-label="Next" button or a button with specific selectors
-    next_button = await page.query_selector(
-        "button[aria-label='Next'], "
-        "a[aria-label='Next'], "
-        "li.artdeco-pagination__indicator--number.active + li a, "
-        "button[aria-label='Page forward']"
-    )
+    # Brief pause to ensure any lazy-loaded pagination elements are rendered
+    await _human_delay(1.0, 2.0)
+
+    # Try multiple selector strategies for the Next button
+    # LinkedIn uses different markup depending on the page variant
+    selectors = [
+        # LinkedIn's current pagination: numbered buttons, find the one after active
+        (
+            "li.jobs-search-pagination__indicator"
+            ":has(button.jobs-search-pagination__indicator-button--active)"
+            " + li button"
+        ),
+        # Artdeco pagination (older variant)
+        "button.artdeco-pagination__button--next",
+        "button[aria-label='Next']",
+        "a[aria-label='Next']",
+        "li.artdeco-pagination__indicator--number.active + li button",
+        "li.artdeco-pagination__indicator--number.active + li a",
+        "button[aria-label='Page forward']",
+    ]
+
+    next_button = None
+    for selector in selectors:
+        next_button = await page.query_selector(selector)
+        if next_button:
+            logger.debug("pagination_button_found", selector=selector)
+            break
 
     if next_button is None:
+        # Last resort: look for any pagination container and find a "next" element
+        pagination = await page.query_selector(
+            ".jobs-search-pagination, .artdeco-pagination, "
+            "nav[aria-label='Pagination'], [class*='pagination']"
+        )
+        if pagination:
+            # There IS a pagination container but we can't find the Next button
+            # Dump the HTML for debugging
+            try:
+                html = await pagination.inner_html()
+                logger.warning(
+                    "pagination_container_found_but_no_next_button",
+                    hint="check data/debug_pagination.png",
+                    html_snippet=html[:500],
+                )
+                await page.screenshot(path="data/debug_pagination.png")
+            except Exception:
+                pass
+        else:
+            logger.debug("pagination_no_container_found")
         return False
 
     is_disabled = await next_button.get_attribute("disabled")
-    if is_disabled is not None:
+    aria_disabled = await next_button.get_attribute("aria-disabled")
+    if is_disabled is not None or aria_disabled == "true":
+        logger.debug("pagination_next_button_disabled")
         return False
 
+    # Scroll the button into view and click
+    await next_button.scroll_into_view_if_needed()
+    await _human_delay(0.5, 1.0)
     await next_button.click()
-    await page.wait_for_load_state("networkidle")
-    await _human_delay(5.0, 12.0)
+    # Don't wait for networkidle — LinkedIn keeps background requests going.
+    # Just wait for DOM to update and give it time to render new cards.
+    await _human_delay(4.0, 7.0)
+
+    # Scroll back to top for the next page's card processing
+    await page.evaluate("window.scrollTo(0, 0)")
+    await _human_delay(1.0, 2.0)
     return True
 
 
