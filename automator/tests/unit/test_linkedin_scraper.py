@@ -386,9 +386,7 @@ class TestDiscoverAndExtractJobs:
 
         # Create a mock card that yields job_id "111111"
         link_el = AsyncMock()
-        link_el.get_attribute = AsyncMock(
-            return_value="https://www.linkedin.com/jobs/view/111111/"
-        )
+        link_el.get_attribute = AsyncMock(return_value="https://www.linkedin.com/jobs/view/111111/")
 
         card = AsyncMock()
         card.query_selector = AsyncMock(return_value=link_el)
@@ -407,7 +405,8 @@ class TestDiscoverAndExtractJobs:
         page.goto = AsyncMock()
         # First call for job cards, second for fallback links (empty)
         page.query_selector_all = AsyncMock(return_value=[card])
-        # query_selector calls: title_el, structured data script tags, company_el, description, easy_apply
+        # query_selector calls: title_el, structured data script tags,
+        # company_el, description, easy_apply
         page.query_selector = AsyncMock(side_effect=[title_el, None, desc_el, None])
 
         config = SearchConfig(keywords="python")
@@ -455,7 +454,10 @@ class TestExtractDescription:
     @patch("src.integrations.linkedin_scraper._human_delay", new_callable=AsyncMock)
     async def test_extracts_description_on_first_attempt(self, mock_delay: AsyncMock) -> None:
         """Successfully extracts description text on the first try."""
-        long_description = "We are looking for a Python developer with 5+ years of experience in building scalable systems."
+        long_description = (
+            "We are looking for a Python developer with 5+ years"
+            " of experience in building scalable systems."
+        )
         description_element = AsyncMock()
         description_element.inner_text = AsyncMock(return_value=long_description)
 
@@ -476,7 +478,10 @@ class TestExtractDescription:
     @patch("src.integrations.linkedin_scraper._human_delay", new_callable=AsyncMock)
     async def test_strips_whitespace_from_description(self, mock_delay: AsyncMock) -> None:
         """Strips leading/trailing whitespace from extracted text."""
-        long_text = "  \n  Job description with whitespace that is long enough to pass the minimum length check  \n  "
+        long_text = (
+            "  \n  Job description with whitespace that is long enough"
+            " to pass the minimum length check  \n  "
+        )
         description_element = AsyncMock()
         description_element.inner_text = AsyncMock(return_value=long_text)
 
@@ -494,7 +499,10 @@ class TestExtractDescription:
     @patch("src.integrations.linkedin_scraper._human_delay", new_callable=AsyncMock)
     async def test_tries_fallback_selectors(self, mock_delay: AsyncMock) -> None:
         """Falls back to subsequent selectors when the first ones don't match."""
-        long_text = "Found via fallback selector with enough content to pass the minimum length threshold for extraction"
+        long_text = (
+            "Found via fallback selector with enough content to pass"
+            " the minimum length threshold for extraction"
+        )
         description_element = AsyncMock()
         description_element.inner_text = AsyncMock(return_value=long_text)
 
@@ -516,7 +524,10 @@ class TestExtractDescription:
         self, mock_sleep: AsyncMock, mock_delay: AsyncMock
     ) -> None:
         """Retries after failure and succeeds on a subsequent attempt."""
-        long_text = "Description after retry that is long enough to pass the minimum length check for extraction"
+        long_text = (
+            "Description after retry that is long enough to pass"
+            " the minimum length check for extraction"
+        )
         description_element = AsyncMock()
         description_element.inner_text = AsyncMock(return_value=long_text)
 
