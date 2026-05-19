@@ -678,11 +678,15 @@ async def process_external_apply(
                             first_option = await page.query_selector("[role='option']")
                             if first_option:
                                 await first_option.click()
-                                log.debug("dropdown_selected_first", label="How Did You Hear About Us")
+                                log.debug(
+                                    "dropdown_selected_first", label="How Did You Hear About Us"
+                                )
                                 total_filled_count += 1
                                 await asyncio.sleep(1)
                             else:
-                                log.debug("dropdown_no_option_found", label="How Did You Hear About Us")
+                                log.debug(
+                                    "dropdown_no_option_found", label="How Did You Hear About Us"
+                                )
                 else:
                     log.debug("dropdown_trigger_not_found", label="How Did You Hear About Us")
             except Exception as exc:
@@ -767,33 +771,33 @@ async def process_external_apply(
         return Result(ok=True, application_notes=notes)
 
     try:
-        submit_button = await page.query_selector(
-            "button[type='submit'], button:has-text('Submit'), "
-            "button:has-text('Apply'), button:has-text('Send Application'), "
-            "input[type='submit']"
-        )
+        # Try each submit selector individually to find the first VISIBLE one.
+        # Some pages (e.g. Lever) have a hidden button[type='submit'] that
+        # matches first in a combined selector, so we iterate and check visibility.
+        submit_selectors = [
+            "button:has-text('Submit')",
+            "button:has-text('Submit application')",
+            "button:has-text('Apply')",
+            "button:has-text('Send Application')",
+            "button[type='submit']",
+            "input[type='submit']",
+        ]
+        submit_button = None
+        for sel in submit_selectors:
+            btn = await page.query_selector(sel)
+            if btn:
+                is_visible = await btn.is_visible()
+                if is_visible:
+                    submit_button = btn
+                    break
+
         if submit_button:
-            is_visible = await submit_button.is_visible()
-            if is_visible:
-                log.info("submitting_form")
-                await submit_button.click()
-                await page.wait_for_load_state("domcontentloaded", timeout=15000)
-            else:
-                log.warning("submit_button_not_visible")
-                await _log_external_apply(
-                    session,
-                    job_record.id,
-                    domain,
-                    "dom",
-                    total_dom_fields_found,
-                    0,
-                    total_filled_count,
-                    "failed",
-                    "no_submit_button",
-                )
-                return Result(
-                    ok=False, error="Submit button not visible", reason="no_submit_button"
-                )
+            # Scroll the button into view before clicking
+            await submit_button.scroll_into_view_if_needed()
+            await asyncio.sleep(0.5)
+            log.info("submitting_form")
+            await submit_button.click()
+            await page.wait_for_load_state("domcontentloaded", timeout=15000)
         else:
             log.warning("no_submit_button")
             await _log_external_apply(
