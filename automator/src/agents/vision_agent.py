@@ -11,6 +11,7 @@ injection via malicious job postings.
 from __future__ import annotations
 
 import asyncio
+import json as _json
 import re
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -436,6 +437,29 @@ async def process_external_apply(
     # Use the auth frame if the form is in an iframe, otherwise use the main page
     auth_target = auth_frame if auth_frame is not None else page
 
+    # Check for CAPTCHA on the auth page (login/registration)
+    # Some ATS sites (like iCIMS) use invisible hCaptcha that blocks form submission
+    if page_type in ("login", "registration"):
+        auth_page_text = page_text  # Already extracted from iframe or main page
+        if _page_has_captcha(auth_page_text):
+            log.warning("captcha_detected_on_auth_page", domain=domain, page_type=page_type)
+            await _log_external_apply(
+                session,
+                job_record.id,
+                domain,
+                "dom",
+                0,
+                0,
+                0,
+                "escalated",
+                "captcha_detected",
+            )
+            return Result(
+                ok=False,
+                error=f"CAPTCHA detected on {page_type} page for {domain}",
+                reason="captcha_detected",
+            )
+
     if page_type == "google_oauth":
         log.info("detected_google_oauth", domain=domain)
         success = await handle_google_oauth(auth_target)
@@ -449,7 +473,21 @@ async def process_external_apply(
         stored = await get_stored_account(session, domain, profile.email)
         if stored and stored.password:
             log.info("using_stored_credentials", domain=domain)
-            await handle_login(auth_target, stored.email, stored.password)
+            login_success = await handle_login(auth_target, stored.email, stored.password)
+            if not login_success:
+                # Login failed (e.g., iCIMS email-only form without password field)
+                # Fall back to registration flow which handles email + privacy checkbox
+                log.info("login_failed_falling_back_to_registration", domain=domain)
+                success, password = await handle_registration(
+                    auth_target, profile.email, profile.full_name
+                )
+                if not success:
+                    log.warning("login_and_registration_both_failed", domain=domain)
+                    return Result(
+                        ok=False,
+                        error=f"Login failed and registration fallback failed for {domain}",
+                        reason="login_required",
+                    )
         elif stored and stored.auth_method == "google_oauth":
             await handle_google_oauth(auth_target)
         else:
@@ -507,6 +545,17 @@ async def process_external_apply(
     # After auth (OAuth/login/registration), we may be back on an intermediate
     # page (e.g., Workday's "Start Your Application" page). Click through again.
     if page_type in ("google_oauth", "login", "registration"):
+        # Wait for the main page to potentially redirect after iframe auth
+        await asyncio.sleep(5)
+        # Check if the page URL still shows login — wait for redirect
+        current_url = page.url.lower()
+        if "/login" in current_url or "/register" in current_url:
+            log.debug("waiting_for_post_auth_redirect", url=page.url[:100])
+            try:
+                await page.wait_for_load_state("domcontentloaded", timeout=15000)
+            except Exception:
+                pass
+            await asyncio.sleep(3)
         await _click_through_to_form(page, log)
 
     while True:
@@ -679,13 +728,15 @@ async def process_external_apply(
                             if first_option:
                                 await first_option.click()
                                 log.debug(
-                                    "dropdown_selected_first", label="How Did You Hear About Us"
+                                    "dropdown_selected_first",
+                                    label="How Did You Hear About Us",
                                 )
                                 total_filled_count += 1
                                 await asyncio.sleep(1)
                             else:
                                 log.debug(
-                                    "dropdown_no_option_found", label="How Did You Hear About Us"
+                                    "dropdown_no_option_found",
+                                    label="How Did You Hear About Us",
                                 )
                 else:
                     log.debug("dropdown_trigger_not_found", label="How Did You Hear About Us")
@@ -731,8 +782,6 @@ async def process_external_apply(
         break
 
     # Submit the form (or skip if dry_run)
-    import json as _json
-
     notes = _json.dumps(filled_details, indent=2) if filled_details else None
 
     # If no DOM fields were found at all, this is where vision would be needed
@@ -1140,9 +1189,32 @@ async def _click_through_to_form(page: Page, log) -> None:
 
     await asyncio.sleep(3)  # Let the page render (Workday SPAs need extra time)
 
+    # Dismiss cookie consent banners that may block Apply button clicks
+    cookie_selectors = [
+        "button:has-text('Accept and Continue')",
+        "button:has-text('Accept All')",
+        "button:has-text('Accept Cookies')",
+        "button:has-text('Accept')",
+        "button[id*='accept']",
+        "#onetrust-accept-btn-handler",
+    ]
+    for selector in cookie_selectors:
+        try:
+            btn = await page.query_selector(selector)
+            if btn:
+                is_visible = await btn.is_visible()
+                if is_visible:
+                    log.debug("dismissing_cookie_banner", selector=selector)
+                    await btn.click()
+                    await asyncio.sleep(1)
+                    break
+        except Exception:
+            continue
+
     apply_selectors = [
         "a[data-automation-id='adventureButton']",  # Workday-specific
         "a[href*='/apply']",  # Generic apply link
+        "a.apply.__button",  # iCIMS-specific (class="apply __button")
         "a:has-text('Apply for this Job')",
         "a:has-text('Apply Now')",
         "a:has-text('Apply for this Position')",
