@@ -19,7 +19,7 @@ from src.db.models import JobRecord
 logger = structlog.get_logger(__name__)
 
 # Minimum number of matching keywords required in a job description
-MIN_KEYWORD_MATCHES = 2
+MIN_KEYWORD_MATCHES = 1
 
 
 def check_title_exclusions(job_record: JobRecord, deal_breakers: list[str]) -> str | None:
