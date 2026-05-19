@@ -15,6 +15,18 @@ Wave 0 (Web App Migration) is **complete and deployed**. The Chrome Extension ha
 
 ---
 
+## UX / Configuration Improvements
+
+- [ ] **Common application answers as a Settings UI section** — Questions like "Do you reside in the US?", "Will you require sponsorship?", veteran status, EEO demographics, and "Have you previously worked for this company?" are currently buried in `common_answers` in the DB. These should be a dedicated section in the web app Settings page with sensible defaults (Yes/No for residency/sponsorship, decline-to-answer for demographics, protected veteran toggle). A new user shouldn't have to manually populate these — the setup wizard or Settings page should prompt for them.
+- [ ] **Intermediate commits during pipeline run** — Jobs are invisible in the web app until the entire run completes (single transaction). Add commits after discovery and after each scoring batch so jobs appear in real-time.
+- [ ] **Post-submission verification** — The pipeline declares `external_apply_success` after clicking Submit, but doesn't verify confirmation text/redirect. Add a check for "application submitted" / "thank you" / redirect to confirmation page before marking success.
+- [x] **Run ID on job records** — Added `run_id` column to `job_records` (format: YYYYMMDD_HHMM). Filterable in Job History via API. Each pipeline run stamps its jobs.
+- [x] **Score filter in Job History** — Added min/max score query params on `GET /jobs` and a min score input in the frontend. Color-coded score badges (green ≥75, yellow ≥50, red <50).
+- [x] **DB-based dedup replacing "Viewed" badge** — Pre-loads job IDs from last 7 days at discovery start, skips known jobs before clicking/extracting. Removed unreliable DOM "Viewed" check.
+- [ ] **Scoring weight strategy as a configurable workflow** — Currently the fit scoring prompt and thresholds (good_fit=65, stretch=50) are hardcoded for one user's priorities. For other users, there should be a guided workflow (in the setup wizard or Settings) that asks what matters most to them (title match, industry, remote, salary, company size, growth opportunity) and builds a weighting strategy that gets injected into the scoring prompt. Think of it as a "What matters to you?" questionnaire that produces a custom scoring rubric rather than one-size-fits-all.
+
+---
+
 ## Feature Waves (Ranked by Priority)
 
 ### ~~Wave 0: Web App Migration~~ ✅ DONE
