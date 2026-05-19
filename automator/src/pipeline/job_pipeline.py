@@ -288,6 +288,18 @@ async def run_pipeline(session: AsyncSession | None = None) -> None:
             # Create JobRecords with title, company, and description already populated
             for job in discovered:
                 try:
+                    # Check if job already exists (from a previous run or preview promote)
+                    existing = await session.execute(
+                        select(JobRecord).where(JobRecord.id == job.job_id)
+                    )
+                    if existing.scalar_one_or_none() is not None:
+                        logger.info(
+                            "pipeline_job_already_exists_skipping",
+                            job_id=job.job_id,
+                            title=job.title,
+                        )
+                        continue
+
                     await create_job_record(
                         session,
                         id=job.job_id,
@@ -323,6 +335,8 @@ async def run_pipeline(session: AsyncSession | None = None) -> None:
                         job_id=job.job_id,
                         error=str(exc),
                     )
+                    # Rollback to recover the session from the failed insert
+                    await session.rollback()
 
             await session.flush()
 
