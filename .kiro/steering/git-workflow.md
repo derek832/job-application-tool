@@ -1,80 +1,121 @@
-# Git Workflow — Automatic Branch Management
+# Git Workflow — Branch, Deploy, Verify, Merge
 
 ## Purpose
 
-This steering file ensures all implementation work happens on feature branches, never directly on `main`. It applies to spec task execution, bug fixes, and any code changes.
+This steering file ensures all code changes follow a branch → deploy → verify → merge workflow. Main represents "known working code." Nothing merges to main until it has been observed working in a live pipeline run.
 
-## Before Starting Work
+## The Workflow
 
-Before writing any code or making any file changes for a feature, task, or fix:
+### 1. Create a Branch
 
-1. **Check the current branch** — run `git branch --show-current`
-2. **If on `main`**, create and switch to a new branch:
-   - For spec features/waves: `feat/<feature-name>` (e.g., `feat/wave-1-notifications-mobile`)
-   - For individual tasks: `feat/<task-id>-<short-description>` (e.g., `feat/2.1-ntfy-client`)
-   - For bug fixes: `fix/<short-description>` (e.g., `fix/rate-limiter-off-by-one`)
-3. **If already on a feature branch** that matches the current work, continue on it.
-4. **Always pull latest main first** before branching:
-   ```
-   git checkout main
-   git pull origin main
-   git checkout -b feat/<branch-name>
-   ```
+Before writing any code:
 
-## After Completing Work
+```
+git checkout main
+git pull origin main
+git checkout -b <branch-type>/<short-description>
+```
 
-When a feature, spec wave, or fix is fully implemented and tests pass:
-
-1. **Stage all relevant files** — prefer `git add <specific files>` over `git add -A` to avoid committing unrelated changes. Use `git add -A` only when all changes are related to the current feature.
-2. **Commit with a conventional commit message**:
-   - `feat: <description>` — new feature or capability
-   - `fix: <description>` — bug fix
-   - `refactor: <description>` — code restructuring
-   - `test: <description>` — test additions/changes only
-   - `chore: <description>` — build, config, dependencies
-3. **Push the branch** with tracking: `git push -u origin <branch-name>`
-4. **Rebuild containers** (see "After Push: Rebuild Containers" below).
-5. **If rebuild succeeds, merge into main**:
-   ```
-   git checkout main
-   git pull origin main
-   git merge <branch-name> --no-edit
-   git push origin main
-   git checkout <branch-name>
-   ```
-6. **If rebuild fails**, fix the issue on the feature branch before merging.
-
-This prevents branch rot — branches are merged immediately after a successful build, not left dangling for manual PR review.
-
-## Branch Naming Convention
-
-| Work Type | Branch Pattern | Example |
+Branch naming:
+| Work Type | Pattern | Example |
 |---|---|---|
-| Spec wave/feature | `feat/<feature-name>` | `feat/wave-1-notifications-mobile` |
-| Individual spec task | `feat/<task-id>-<description>` | `feat/2.1-ntfy-client` |
-| Bug fix | `fix/<description>` | `fix/scoring-threshold-boundary` |
-| Refactor | `refactor/<description>` | `refactor/notification-service` |
+| Bug fix | `fix/<description>` | `fix/rollback-integrity-error` |
+| Feature | `feat/<description>` | `feat/per-job-commits` |
+| Refactor | `refactor/<description>` | `refactor/pipeline-flow` |
 
-## After Push: Rebuild Containers
+### 2. Implement and Commit
 
-After committing and pushing, rebuild the Docker containers that were affected by the changes:
+- Make the change
+- Stage specific files (`git add <files>`, not `git add -A` unless all changes are related)
+- Commit with a conventional message: `fix:`, `feat:`, `refactor:`, `test:`, `chore:`
+- Keep subject under 72 characters
 
-1. **Determine which containers were touched** based on the files changed:
-   - Changes in `automator/` → rebuild `automator`: `docker compose build automator`
-   - Changes in `webapp/` → rebuild `frontend`: `docker compose build frontend`
-   - Changes in `docker-compose.yml` or root config → rebuild all: `docker compose build`
-2. **Restart the affected services**: `docker compose up -d`
-3. **Check logs** to verify clean startup: `docker compose logs <service> --tail=30`
+### 3. Push the Branch
 
-This ensures the running containers always reflect the latest committed code.
+```
+git push -u origin <branch-name>
+```
+
+This ensures the branch exists on GitHub regardless of what happens next.
+
+### 4. Deploy to Local Containers
+
+Build and restart the affected service(s):
+
+```
+docker compose build automator
+docker compose up -d automator
+```
+
+Or for frontend changes:
+```
+docker compose build frontend
+docker compose up -d frontend
+```
+
+The running containers now have the branch code. This IS the test environment.
+
+### 5. Verify with a Live Run
+
+**This is the critical step.** Do NOT merge until verification passes.
+
+For pipeline-affecting changes (anything in `automator/src/`):
+- Wait for the next scheduled pipeline run, OR trigger a manual run
+- Observe the run via `docker compose logs automator --tail=100`
+- Confirm: no crashes, no `pipeline_fatal_error`, expected behavior in logs
+- Check the web app: jobs appearing, correct statuses, no 504s
+
+For frontend-only changes:
+- Refresh the web app and confirm the change works visually
+- No need to wait for a pipeline run
+
+For test-only or docs-only changes:
+- Run the test suite: `python -m pytest tests/ -q`
+- Merge immediately after tests pass (no live run needed)
+
+### 6. Merge to Main
+
+Only after verification passes:
+
+```
+git checkout main
+git pull origin main
+git merge <branch-name> --no-edit
+git push origin main
+```
+
+### 7. Stay on the Branch for Follow-ups
+
+If the verification reveals issues:
+- Stay on the branch
+- Fix the issue, commit, push
+- Rebuild containers
+- Re-verify
+- Only merge once it's clean
 
 ## Rules
 
-- **Never commit directly to `main`**. Always use a feature branch.
-- **One branch per logical unit of work** — a spec wave, a feature, or a fix. Don't mix unrelated changes.
-- **Check branch before first file edit** — this is the most important rule. If you're about to write code and you're on `main`, stop and branch first.
-- **Merge after successful rebuild** — don't leave branches unmerged. Merge into main immediately after containers build and start cleanly.
-- **Keep merged branches** — don't delete branches after merging. They serve as a history of what was done. Use `git branch --merged main` to see them.
-- **Commit messages under 72 characters** for the subject line. Use the body for details if needed.
+- **Never commit directly to main.** Always use a branch.
+- **Never merge without verification.** The merge is the "this works" signal.
+- **Always push the branch before deploying.** GitHub should have the code even if verification fails.
+- **Always rebuild after commit.** Don't leave stale containers running old code.
+- **One branch per logical change.** Don't mix unrelated fixes on one branch.
+- **Keep merged branches.** They serve as history. Don't delete them.
 - **Don't force-push** unless explicitly asked.
-- **Always rebuild after commit** — don't leave stale containers running with old code.
+
+## When Multiple Fixes Happen in One Session
+
+If you're iterating on several bugs in one conversation:
+- Each fix gets its own branch
+- Deploy and verify each one before merging
+- If fixes are interdependent (fix B depends on fix A), stack them: merge A first, then branch B from updated main
+
+## Exception: Trivial Non-Code Changes
+
+These can go directly to main without a branch:
+- README/docs-only edits
+- Steering file updates
+- TODO.md updates
+- .gitignore changes
+
+Everything that touches `automator/src/`, `webapp/src/`, `docker-compose.yml`, or `Dockerfile` MUST go through the branch workflow.
