@@ -97,7 +97,7 @@ async def run_pipeline(session: AsyncSession | None = None) -> None:
         # Clear the flag so subsequent scheduled runs don't skip
         system_state["skip_discovery"] = False
         await set_config(session, "system_state", system_state)
-        await session.flush()
+        await session.commit()
 
     # Step 2: Check goals_profile is configured
     goals_profile_raw = await get_config(session, "goals_profile")
@@ -171,7 +171,7 @@ async def run_pipeline(session: AsyncSession | None = None) -> None:
                     "keywords": filter_keywords,
                 },
             )
-            await session.flush()
+            await session.commit()
     elif not skip_discovery:
         # No Claude client — try to load cached keywords
         keyword_config = await get_config(session, "filter_keywords") or {}
@@ -207,7 +207,7 @@ async def run_pipeline(session: AsyncSession | None = None) -> None:
         current_state = await get_config(session, "system_state") or {}
         current_state["last_health_check_at"] = health_result.checked_at
         await set_config(session, "system_state", current_state)
-        await session.flush()
+        await session.commit()
         logger.info(
             "pipeline_health_check_passed",
             checked_at=health_result.checked_at,
@@ -358,9 +358,8 @@ async def run_pipeline(session: AsyncSession | None = None) -> None:
                         company=job.company,
                         apply_type=job.apply_type,
                     )
+                    await session.commit()
                 except Exception as exc:
-                    # Rollback to savepoint to keep session usable
-                    await session.rollback()
                     logger.error(
                         "pipeline_job_record_creation_failed",
                         job_id=job.job_id,
@@ -373,8 +372,6 @@ async def run_pipeline(session: AsyncSession | None = None) -> None:
                 skipped_existing=len(existing_ids),
                 total_discovered=len(discovered),
             )
-
-            await session.flush()
 
             # Step 7.5: Blacklist filtering — check extracted jobs before scoring
             from src.db.blacklist_repo import build_blacklist_config, get_all_entries
@@ -422,13 +419,13 @@ async def run_pipeline(session: AsyncSession | None = None) -> None:
                         if entry_id is not None:
                             await _increment_hit_count(session, entry_id)
                     blacklisted_count += 1
+                    await session.commit()
 
             if blacklisted_count > 0:
                 logger.info(
                     "pipeline_blacklist_filtering_completed",
                     blacklisted=blacklisted_count,
                 )
-                await session.flush()
 
             # Step 8: Run scoring for jobs in "extracted" status
             if claude_client:
@@ -470,6 +467,7 @@ async def run_pipeline(session: AsyncSession | None = None) -> None:
                             title=job_record.job_title,
                             term=excluded_term,
                         )
+                        await session.commit()
                         continue
 
                     # Pre-filter: check keyword presence in description
@@ -488,6 +486,7 @@ async def run_pipeline(session: AsyncSession | None = None) -> None:
                             title=job_record.job_title,
                             company=job_record.company,
                         )
+                        await session.commit()
                         continue
 
                     # Pre-filter: check salary range against minimum
@@ -502,6 +501,7 @@ async def run_pipeline(session: AsyncSession | None = None) -> None:
                             "skipped",
                             reason="Pre-filter: salary below minimum",
                         )
+                        await session.commit()
                         continue
 
                     try:
@@ -521,6 +521,7 @@ async def run_pipeline(session: AsyncSession | None = None) -> None:
                             job_id=job_record.id,
                             new_status=job_record.status,
                         )
+                        await session.commit()
                     except Exception as exc:
                         logger.error(
                             "pipeline_scoring_error",
@@ -530,7 +531,6 @@ async def run_pipeline(session: AsyncSession | None = None) -> None:
             else:
                 logger.warning("pipeline_scoring_skipped_no_claude_client")
 
-            await session.flush()
         else:
             logger.info("pipeline_discovery_and_scoring_skipped")
 
@@ -678,6 +678,7 @@ async def run_pipeline(session: AsyncSession | None = None) -> None:
                         job_id=job_record.id,
                         final_status=job_record.status,
                     )
+                    await session.commit()
                 except Exception as exc:
                     logger.error(
                         "pipeline_application_error",
@@ -702,8 +703,6 @@ async def run_pipeline(session: AsyncSession | None = None) -> None:
                 logger.warning("pipeline_apply_skipped_no_claude_client")
             if not gdocs_client:
                 logger.warning("pipeline_apply_skipped_no_gdocs_client")
-
-        await session.flush()
 
     except Exception as exc:
         logger.error("pipeline_fatal_error", error=str(exc))
@@ -961,7 +960,7 @@ async def _generate_and_publish_run_summary(
         summary_text = generate_summary_text(stats)
         await store_run_summary(session, stats, summary_text)
         await send_run_summary(session, summary_text, notification_settings)
-        await session.flush()
+        await session.commit()
 
         logger.info(
             "pipeline_run_summary_published",
