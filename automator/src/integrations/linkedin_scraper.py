@@ -280,6 +280,66 @@ async def _extract_company_from_structured_data(page: Page) -> str | None:
     return None
 
 
+# Selectors and text patterns indicating LinkedIn returned zero search results.
+# LinkedIn shows a "No matching jobs found" banner when the query has no hits,
+# then renders "Jobs you may be interested in" recommendations below.
+_NO_RESULTS_SELECTORS: list[str] = [
+    "div.jobs-search-no-results-banner",
+    "div[class*='jobs-search-no-results']",
+    "div[class*='no-results']",
+    "h1[class*='no-results']",
+]
+
+_NO_RESULTS_TEXT_PATTERNS: list[str] = [
+    "no matching jobs found",
+    "no results found",
+    "no jobs found",
+]
+
+
+async def _detect_no_results(page: Page) -> bool:
+    """Detect whether LinkedIn is showing a 'No matching jobs found' state.
+
+    Checks for known banner selectors first (fast), then falls back to
+    scanning visible page text for known no-results phrases.
+
+    Args:
+        page: The Playwright page showing LinkedIn search results.
+
+    Returns:
+        True if the page indicates zero search results, False otherwise.
+    """
+    # Strategy 1: Check for known no-results banner elements
+    for selector in _NO_RESULTS_SELECTORS:
+        try:
+            el = await page.query_selector(selector)
+            if el and await el.is_visible():
+                logger.debug("no_results_banner_detected", selector=selector)
+                return True
+        except Exception:
+            continue
+
+    # Strategy 2: Check page text for no-results phrases
+    try:
+        # Scope to the main content area to avoid false positives from nav/footer
+        main_el = await page.query_selector(
+            "main, div.scaffold-layout__main, div[class*='jobs-search']"
+        )
+        if main_el:
+            page_text = (await main_el.inner_text()).lower()
+        else:
+            page_text = (await page.inner_text("body")).lower()
+
+        for pattern in _NO_RESULTS_TEXT_PATTERNS:
+            if pattern in page_text:
+                logger.debug("no_results_text_detected", pattern=pattern)
+                return True
+    except Exception as exc:
+        logger.debug("no_results_text_check_failed", error=str(exc))
+
+    return False
+
+
 @dataclass
 class DiscoveredJob:
     """Job data extracted from the search results page."""
@@ -322,6 +382,20 @@ async def discover_and_extract_jobs(
 
     await page.goto(search_url, timeout=60000)
     await _human_delay(3.0, 6.0)
+
+    # Detect LinkedIn's "No matching jobs found" state before extracting cards.
+    # When a search returns zero results, LinkedIn shows this banner and then
+    # displays "Jobs you may be interested in" recommendations below it.
+    # We must bail early to avoid scoring those irrelevant suggestions.
+    no_results_detected = await _detect_no_results(page)
+    if no_results_detected:
+        logger.info(
+            "no_matching_jobs_found",
+            search_url=search_url,
+            keywords=config.keywords,
+            location=config.location,
+        )
+        return []
 
     all_discovered: list[DiscoveredJob] = []
     seen_ids: set[str] = set()

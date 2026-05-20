@@ -14,6 +14,7 @@ from src.db.models import Base, JobRecord
 from src.exceptions import ExtractionError
 from src.integrations.linkedin_scraper import (
     _JOB_ID_PATTERN,
+    _detect_no_results,
     _extract_job_ids_from_page,
     build_search_url,
     discover_and_extract_jobs,
@@ -308,6 +309,99 @@ class TestExtractJobIdsFromPage:
 
 
 # ---------------------------------------------------------------------------
+# Tests for _detect_no_results
+# ---------------------------------------------------------------------------
+
+
+class TestDetectNoResults:
+    """Tests for the _detect_no_results helper function."""
+
+    @pytest.mark.asyncio
+    async def test_returns_true_when_no_results_banner_visible(self) -> None:
+        """Detects the no-results state via a visible banner element."""
+        banner_el = AsyncMock()
+        banner_el.is_visible = AsyncMock(return_value=True)
+
+        page = AsyncMock()
+        page.query_selector = AsyncMock(return_value=banner_el)
+
+        result = await _detect_no_results(page)
+        assert result is True
+
+    @pytest.mark.asyncio
+    async def test_returns_true_when_no_results_text_in_main_content(self) -> None:
+        """Detects the no-results state via text content in the main area."""
+        # No banner element found
+        page = AsyncMock()
+        page.query_selector = AsyncMock(return_value=None)
+
+        # But main content contains the no-results text
+        main_el = AsyncMock()
+        main_el.inner_text = AsyncMock(
+            return_value="No matching jobs found\nJobs you may be interested in"
+        )
+        # First calls for banner selectors return None, then main content selector
+        call_count = {"n": 0}
+        original_return = None
+
+        async def query_selector_side_effect(selector: str):
+            if "no-results" in selector or "no_results" in selector:
+                return None
+            # Return main_el for the main content selector
+            return main_el
+
+        page.query_selector = AsyncMock(side_effect=query_selector_side_effect)
+
+        result = await _detect_no_results(page)
+        assert result is True
+
+    @pytest.mark.asyncio
+    async def test_returns_false_when_normal_results_page(self) -> None:
+        """Returns False when the page has normal search results."""
+        page = AsyncMock()
+        # No banner elements found
+        page.query_selector = AsyncMock(return_value=None)
+
+        # Main content has normal job listings text
+        main_el = AsyncMock()
+        main_el.inner_text = AsyncMock(
+            return_value="Software Engineer at Google\nSenior Developer at Meta"
+        )
+
+        # Override to return None for banner selectors, main_el for content
+        async def query_selector_side_effect(selector: str):
+            if "no-results" in selector or "no_results" in selector:
+                return None
+            return main_el
+
+        page.query_selector = AsyncMock(side_effect=query_selector_side_effect)
+
+        result = await _detect_no_results(page)
+        assert result is False
+
+    @pytest.mark.asyncio
+    async def test_returns_false_when_banner_exists_but_not_visible(self) -> None:
+        """Returns False when banner element exists but is hidden."""
+        banner_el = AsyncMock()
+        banner_el.is_visible = AsyncMock(return_value=False)
+
+        # Main content is normal
+        main_el = AsyncMock()
+        main_el.inner_text = AsyncMock(return_value="Python Developer at Acme Corp")
+
+        async def query_selector_side_effect(selector: str):
+            if "no-results" in selector or "no_results" in selector:
+                return banner_el
+            return main_el
+
+        page = AsyncMock()
+        page.query_selector = AsyncMock(side_effect=query_selector_side_effect)
+
+        result = await _detect_no_results(page)
+        assert result is False
+
+
+# ---------------------------------------------------------------------------
 # Tests for discover_and_extract_jobs
 # ---------------------------------------------------------------------------
 
@@ -343,7 +437,14 @@ class TestDiscoverAndExtractJobs:
 
         config = SearchConfig(keywords="python developer", location="NYC")
 
-        with patch("src.integrations.linkedin_scraper._human_delay", new_callable=AsyncMock):
+        with (
+            patch("src.integrations.linkedin_scraper._human_delay", new_callable=AsyncMock),
+            patch(
+                "src.integrations.linkedin_scraper._detect_no_results",
+                new_callable=AsyncMock,
+                return_value=False,
+            ),
+        ):
             await discover_and_extract_jobs(page, config, async_session, max_pages=1)
 
         expected_url = build_search_url(config)
@@ -360,10 +461,43 @@ class TestDiscoverAndExtractJobs:
 
         config = SearchConfig(keywords="nonexistent")
 
-        with patch("src.integrations.linkedin_scraper._human_delay", new_callable=AsyncMock):
+        with (
+            patch("src.integrations.linkedin_scraper._human_delay", new_callable=AsyncMock),
+            patch(
+                "src.integrations.linkedin_scraper._detect_no_results",
+                new_callable=AsyncMock,
+                return_value=False,
+            ),
+        ):
             result = await discover_and_extract_jobs(page, config, async_session, max_pages=1)
 
         assert result == []
+
+    @pytest.mark.asyncio
+    async def test_returns_empty_list_when_no_matching_jobs_banner_detected(
+        self, async_session: AsyncSession
+    ) -> None:
+        """discover_and_extract_jobs returns empty list when LinkedIn shows 'No matching jobs'."""
+        page = AsyncMock()
+        page.goto = AsyncMock()
+        # These should never be called because we bail early
+        page.query_selector_all = AsyncMock(return_value=[])
+
+        config = SearchConfig(keywords="unicorn wrangler", location="Antarctica")
+
+        with (
+            patch("src.integrations.linkedin_scraper._human_delay", new_callable=AsyncMock),
+            patch(
+                "src.integrations.linkedin_scraper._detect_no_results",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+        ):
+            result = await discover_and_extract_jobs(page, config, async_session, max_pages=1)
+
+        assert result == []
+        # Verify we never tried to extract job cards
+        page.query_selector_all.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_filters_out_existing_ids(self, async_session: AsyncSession) -> None:
@@ -417,6 +551,11 @@ class TestDiscoverAndExtractJobs:
                 "src.integrations.linkedin_scraper._extract_company_from_structured_data",
                 new_callable=AsyncMock,
                 return_value="Existing Co",
+            ),
+            patch(
+                "src.integrations.linkedin_scraper._detect_no_results",
+                new_callable=AsyncMock,
+                return_value=False,
             ),
         ):
             result = await discover_and_extract_jobs(page, config, async_session, max_pages=1)
