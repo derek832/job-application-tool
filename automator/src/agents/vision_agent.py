@@ -541,6 +541,7 @@ async def process_external_apply(
     total_dom_fields_found = 0
     total_filled_count = 0
     filled_details: list[dict[str, str]] = []
+    all_dom_fields: list[dict] = []
 
     # After auth (OAuth/login/registration), we may be back on an intermediate
     # page (e.g., Workday's "Start Your Application" page). Click through again.
@@ -584,6 +585,7 @@ async def process_external_apply(
         dom_fields = await _extract_dom_fields(page)
         log.info("dom_fields_extracted", count=len(dom_fields), page_number=page_count)
         total_dom_fields_found += len(dom_fields)
+        all_dom_fields.extend(dom_fields)
 
         if not dom_fields:
             # No fields found — might be a confirmation page or error
@@ -781,8 +783,57 @@ async def process_external_apply(
         # No next button — look for submit
         break
 
-    # Submit the form (or skip if dry_run)
-    notes = _json.dumps(filled_details, indent=2) if filled_details else None
+    # Build comprehensive field report: all fields found + fill status
+    all_fields_info: list[dict[str, str]] = []
+    filled_labels = {d["field"] for d in filled_details}
+    for field in all_dom_fields:
+        label = field.get("label", "").strip()
+        if not label:
+            continue
+        field_type = field.get("type", "text")
+        if label in filled_labels:
+            value = next((d["value"] for d in filled_details if d["field"] == label), "")
+            all_fields_info.append({"field": label, "value": value, "status": "filled"})
+        elif field_type == "file":
+            all_fields_info.append({"field": label, "value": "file_upload", "status": "handled"})
+        else:
+            all_fields_info.append({"field": label, "value": "", "status": "unfilled"})
+
+    notes = _json.dumps(all_fields_info, indent=2) if all_fields_info else None
+
+    # Check fill rate — escalate if too many fields unfilled
+    fillable_fields = [f for f in all_fields_info if f["status"] != "handled"]
+    filled_count_check = sum(1 for f in fillable_fields if f["status"] == "filled")
+    total_fillable = len(fillable_fields)
+
+    if total_fillable > 0 and filled_count_check / total_fillable < 0.5:
+        log.warning(
+            "low_fill_rate_escalating",
+            filled=filled_count_check,
+            total=total_fillable,
+            fill_rate=round(filled_count_check / total_fillable, 2),
+        )
+        await _log_external_apply(
+            session,
+            job_record.id,
+            domain,
+            "dom",
+            total_dom_fields_found,
+            0,
+            total_filled_count,
+            "escalated",
+            "low_fill_rate",
+        )
+        fill_pct = round(filled_count_check / total_fillable * 100)
+        return Result(
+            ok=False,
+            error=(
+                f"Only {filled_count_check}/{total_fillable} fields filled"
+                f" ({fill_pct}%). Escalating to manual apply."
+            ),
+            reason="low_fill_rate",
+            application_notes=notes,
+        )
 
     # If no DOM fields were found at all, this is where vision would be needed
     if total_dom_fields_found == 0:
