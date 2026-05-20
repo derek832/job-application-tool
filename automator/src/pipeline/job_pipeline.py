@@ -360,10 +360,11 @@ async def run_pipeline(session: AsyncSession | None = None) -> None:
                     )
                     await session.commit()
                 except Exception as exc:
+                    await session.rollback()
                     logger.error(
                         "pipeline_job_record_creation_failed",
                         job_id=job.job_id,
-                        error=str(exc),
+                        error=str(exc)[:200],
                     )
 
             logger.info(
