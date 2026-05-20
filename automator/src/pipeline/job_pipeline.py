@@ -140,8 +140,13 @@ async def run_pipeline(session: AsyncSession | None = None) -> None:
 
     # Step 3.5: Generate/refresh pre-filter keywords if profile changed
     filter_keywords: list[str] = []
+    core_keywords: list[str] = []
+    supporting_keywords: list[str] = []
     if claude_client and not skip_discovery:
-        from src.pipeline.prefilter import compute_context_hash, generate_filter_keywords
+        from src.pipeline.prefilter import (
+            compute_context_hash,
+            generate_tiered_filter_keywords,
+        )
 
         current_hash = compute_context_hash(
             goals_profile.supplementary_context,
@@ -150,24 +155,44 @@ async def run_pipeline(session: AsyncSession | None = None) -> None:
         )
         keyword_config = await get_config(session, "filter_keywords") or {}
         stored_hash = keyword_config.get("hash")
+        stored_core = keyword_config.get("core", [])
+        stored_supporting = keyword_config.get("supporting", [])
+        # Backward compat: old format stored flat "keywords" list
         stored_keywords = keyword_config.get("keywords", [])
 
-        if stored_hash == current_hash and stored_keywords:
-            filter_keywords = stored_keywords
-            logger.info("prefilter_keywords_loaded_from_cache", count=len(filter_keywords))
+        if stored_hash == current_hash and (stored_core or stored_keywords):
+            if stored_core:
+                core_keywords = stored_core
+                supporting_keywords = stored_supporting
+                filter_keywords = stored_core + stored_supporting
+            else:
+                # Legacy flat format — use as-is until regenerated
+                filter_keywords = stored_keywords
+            logger.info(
+                "prefilter_keywords_loaded_from_cache",
+                core_count=len(core_keywords),
+                supporting_count=len(supporting_keywords),
+                total=len(filter_keywords),
+            )
         else:
             logger.info("prefilter_keywords_regenerating", reason="profile_changed")
-            filter_keywords = await generate_filter_keywords(
+            tiered = await generate_tiered_filter_keywords(
                 claude_client=claude_client,
                 supplementary_context=goals_profile.supplementary_context,
                 career_objective=goals_profile.career_objective,
                 target_titles=goals_profile.target_titles,
             )
+            core_keywords = tiered["core"]
+            supporting_keywords = tiered["supporting"]
+            filter_keywords = core_keywords + supporting_keywords
             await set_config(
                 session,
                 "filter_keywords",
                 {
                     "hash": current_hash,
+                    "core": core_keywords,
+                    "supporting": supporting_keywords,
+                    # Keep flat "keywords" for backward compat with web app
                     "keywords": filter_keywords,
                 },
             )
@@ -175,7 +200,11 @@ async def run_pipeline(session: AsyncSession | None = None) -> None:
     elif not skip_discovery:
         # No Claude client — try to load cached keywords
         keyword_config = await get_config(session, "filter_keywords") or {}
+        core_keywords = keyword_config.get("core", [])
+        supporting_keywords = keyword_config.get("supporting", [])
         filter_keywords = keyword_config.get("keywords", [])
+        if not filter_keywords and (core_keywords or supporting_keywords):
+            filter_keywords = core_keywords + supporting_keywords
 
     # Step 3.6: Session health check before launching browser
     cdp_url = os.environ.get("CHROME_CDP_URL", "http://host.docker.internal:9222")
@@ -448,7 +477,9 @@ async def run_pipeline(session: AsyncSession | None = None) -> None:
                 for job_record in extracted_jobs:
                     # Pre-filter: check title exclusions
                     from src.pipeline.prefilter import (
+                        check_description_length,
                         check_keyword_presence,
+                        check_tiered_keyword_presence,
                         check_title_exclusions,
                     )
 
@@ -471,24 +502,66 @@ async def run_pipeline(session: AsyncSession | None = None) -> None:
                         await session.commit()
                         continue
 
-                    # Pre-filter: check keyword presence in description
-                    if not check_keyword_presence(job_record, filter_keywords):
+                    # Pre-filter: check description length (skip recruiter spam)
+                    if not check_description_length(job_record):
                         from src.db.job_repo import update_job_status
 
                         await update_job_status(
                             session,
                             job_record.id,
                             "skipped",
-                            reason="Pre-filter: insufficient keyword matches",
+                            reason="Pre-filter: description too short",
                         )
                         logger.info(
-                            "prefilter_keyword_excluded",
+                            "prefilter_description_too_short",
                             job_id=job_record.id,
                             title=job_record.job_title,
-                            company=job_record.company,
+                            length=len(job_record.description_text or ""),
                         )
                         await session.commit()
                         continue
+
+                    # Pre-filter: check keyword presence in description (tiered)
+                    if core_keywords or supporting_keywords:
+                        # Use tiered matching when tiered keywords are available
+                        if not check_tiered_keyword_presence(
+                            job_record, core_keywords, supporting_keywords
+                        ):
+                            from src.db.job_repo import update_job_status
+
+                            await update_job_status(
+                                session,
+                                job_record.id,
+                                "skipped",
+                                reason="Pre-filter: insufficient keyword matches (tiered)",
+                            )
+                            logger.info(
+                                "prefilter_keyword_excluded",
+                                job_id=job_record.id,
+                                title=job_record.job_title,
+                                company=job_record.company,
+                            )
+                            await session.commit()
+                            continue
+                    elif filter_keywords:
+                        # Fallback to flat keyword matching (legacy)
+                        if not check_keyword_presence(job_record, filter_keywords):
+                            from src.db.job_repo import update_job_status
+
+                            await update_job_status(
+                                session,
+                                job_record.id,
+                                "skipped",
+                                reason="Pre-filter: insufficient keyword matches",
+                            )
+                            logger.info(
+                                "prefilter_keyword_excluded",
+                                job_id=job_record.id,
+                                title=job_record.job_title,
+                                company=job_record.company,
+                            )
+                            await session.commit()
+                            continue
 
                     # Pre-filter: check salary range against minimum
                     from src.pipeline.prefilter import check_salary_filter

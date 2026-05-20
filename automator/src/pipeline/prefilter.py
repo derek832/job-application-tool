@@ -1,8 +1,12 @@
 """Pre-scoring filters to eliminate obviously irrelevant jobs before Claude API calls.
 
-Applies cheap local checks (title exclusion, keyword presence) to skip jobs
-that clearly don't match the candidate's profile. Saves Claude API tokens by
-only scoring jobs that pass basic relevance thresholds.
+Applies cheap local checks (title exclusion, keyword presence, salary floor) to
+skip jobs that clearly don't match the candidate's profile. Saves Claude API tokens
+by only scoring jobs that pass basic relevance thresholds.
+
+Uses a tiered keyword system:
+- Core keywords: high-signal domain/framework terms (need fewer matches)
+- Supporting keywords: tools/generic terms that appear in relevant AND irrelevant jobs
 """
 
 from __future__ import annotations
@@ -18,50 +22,122 @@ from src.db.models import JobRecord
 
 logger = structlog.get_logger(__name__)
 
-# Minimum number of matching keywords required in a job description
-MIN_KEYWORD_MATCHES = 1
+# Minimum description length to be worth scoring (filters recruiter spam)
+MIN_DESCRIPTION_LENGTH = 200
+
+# Title-based negative signals: roles that are clearly platform-specific
+# implementation positions or wrong domain entirely. Only matched against title.
+TITLE_NEGATIVE_SIGNALS: list[str] = [
+    "sailpoint",
+    "servicenow developer",
+    "servicenow admin",
+    "workday developer",
+    "workday consultant",
+    "workday adaptive",
+    "sap consultant",
+    "sap admin",
+    "salesforce admin",
+    "salesforce developer",
+    "salesforce architect",
+    "oracle dba",
+    "mainframe",
+    "cobol",
+    "peoplesoft",
+    "data scientist",
+    "machine learning engineer",
+    "ml engineer",
+    "frontend developer",
+    "backend developer",
+    "full stack developer",
+    "ios developer",
+    "android developer",
+    "ux designer",
+    "ui designer",
+    "graphic designer",
+    "accountant",
+    "financial analyst",
+    "recruiter",
+    "talent acquisition",
+    "hr generalist",
+    "marketing manager",
+    "sales representative",
+    "account executive",
+    "customer success",
+    "physical security",
+]
 
 
 def check_title_exclusions(job_record: JobRecord, deal_breakers: list[str]) -> str | None:
-    """Check if the job title contains any deal-breaker terms.
+    """Check if the job title contains any deal-breaker terms or negative signals.
 
-    Performs case-insensitive word-boundary matching against the job title.
-    This is a quick pre-filter — Claude still does contextual deal-breaker
-    analysis during scoring for edge cases.
+    Performs case-insensitive substring matching against the job title for both
+    user-configured deal-breakers and built-in negative signals (platform-specific
+    roles that are clearly wrong domain).
 
     Args:
         job_record: The job record to check.
         deal_breakers: List of terms that disqualify a job by title.
 
     Returns:
-        The matched deal-breaker term if found, or None if the title is clean.
+        The matched term if found, or None if the title is clean.
     """
     title_lower = (job_record.job_title or "").lower()
 
+    # Check user-configured deal-breakers
     for term in deal_breakers:
         if term.lower() in title_lower:
             return term
 
+    # Check built-in negative signals (title-only, never description)
+    for signal in TITLE_NEGATIVE_SIGNALS:
+        if signal in title_lower:
+            return f"title_signal:{signal}"
+
     return None
+
+
+def check_description_length(job_record: JobRecord) -> bool:
+    """Check if the job description meets the minimum length threshold.
+
+    Very short descriptions are typically recruiter spam, aggregator noise,
+    or placeholder postings not worth spending Claude tokens on.
+
+    Args:
+        job_record: The job record with description_text populated.
+
+    Returns:
+        True if the description is long enough to score. False if too short.
+    """
+    description = job_record.description_text or ""
+    return len(description.strip()) >= MIN_DESCRIPTION_LENGTH
 
 
 def check_keyword_presence(
     job_record: JobRecord,
     keywords: list[str],
-    min_matches: int = MIN_KEYWORD_MATCHES,
+    min_matches: int = 1,
 ) -> bool:
     """Check if the job description contains enough matching keywords.
 
-    Performs case-insensitive substring matching of extracted keywords against
-    the full job description text.
+    Supports tiered keyword matching when keywords are provided as a structured
+    dict with 'core' and 'supporting' lists. Falls back to flat list matching
+    for backward compatibility.
+
+    Tiered logic:
+    - Pass if ≥2 core keyword matches, OR
+    - Pass if ≥1 core + ≥2 supporting matches, OR
+    - Pass if ≥4 supporting matches
+
+    Flat list logic (legacy):
+    - Pass if ≥min_matches total keyword matches
 
     Args:
         job_record: The job record with description_text populated.
-        keywords: List of relevant skill/domain keywords to check for.
-        min_matches: Minimum number of keywords that must appear. Defaults to 2.
+        keywords: List of relevant keywords for matching.
+        min_matches: Minimum matches for flat list mode. Defaults to 1.
 
     Returns:
-        True if the description contains at least min_matches keywords.
+        True if the description contains sufficient keyword signal.
     """
     if not keywords:
         return True  # No keywords configured — pass everything through
@@ -72,6 +148,59 @@ def check_keyword_presence(
 
     matches = sum(1 for kw in keywords if kw.lower() in description_lower)
     return matches >= min_matches
+
+
+def check_tiered_keyword_presence(
+    job_record: JobRecord,
+    core_keywords: list[str],
+    supporting_keywords: list[str],
+) -> bool:
+    """Check if the job description passes tiered keyword matching.
+
+    Uses a weighted approach where core keywords (high-signal domain terms)
+    require fewer matches than supporting keywords (common tools/generic terms).
+
+    Pass conditions (any one is sufficient):
+    - ≥2 core keyword matches
+    - ≥1 core + ≥2 supporting matches
+    - ≥4 supporting matches
+
+    Args:
+        job_record: The job record with description_text populated.
+        core_keywords: High-signal domain/framework terms.
+        supporting_keywords: Tools and generic terms that appear broadly.
+
+    Returns:
+        True if the description passes the tiered keyword filter.
+    """
+    if not core_keywords and not supporting_keywords:
+        return True  # No keywords configured — pass everything through
+
+    description_lower = (job_record.description_text or "").lower()
+    if not description_lower:
+        return False
+
+    core_matches = sum(1 for kw in core_keywords if kw.lower() in description_lower)
+    supporting_matches = sum(
+        1 for kw in supporting_keywords if kw.lower() in description_lower
+    )
+
+    # Tiered pass conditions
+    if core_matches >= 2:
+        return True
+    if core_matches >= 1 and supporting_matches >= 2:
+        return True
+    if supporting_matches >= 4:
+        return True
+
+    logger.debug(
+        "prefilter_tiered_keyword_failed",
+        job_id=job_record.id,
+        title=job_record.job_title,
+        core_matches=core_matches,
+        supporting_matches=supporting_matches,
+    )
+    return False
 
 
 def compute_context_hash(
@@ -111,9 +240,9 @@ async def generate_filter_keywords(
 ) -> list[str]:
     """Use Claude to extract relevant filter keywords from the user's profile.
 
-    Makes a single cheap API call to extract 20-30 keywords that represent
-    the candidate's skills, tools, and domain expertise. These are used for
-    pre-filtering job descriptions before full scoring.
+    Makes a single cheap API call to extract 50-60 keywords organized into
+    core (high-signal) and supporting (common/generic) tiers. These are used
+    for pre-filtering job descriptions before full scoring.
 
     Args:
         claude_client: Configured Claude API client.
@@ -122,7 +251,7 @@ async def generate_filter_keywords(
         target_titles: List of target job titles.
 
     Returns:
-        A list of lowercase keyword strings for matching.
+        A list of lowercase keyword strings for matching (flat, for backward compat).
     """
     from src.exceptions import ScoringError
 
@@ -142,21 +271,39 @@ async def generate_filter_keywords(
 
     system_prompt = (
         "You extract job-matching keywords from candidate profiles. "
-        "Return only a JSON array of lowercase keyword strings."
+        "Return only a JSON object with tiered keyword lists."
     )
     user_prompt = (
         f"## Candidate Profile\n{profile_text}\n\n"
-        "Extract 20-30 keywords and short phrases that represent this candidate's "
-        "skills, tools, certifications, and domain expertise. These will be used to "
-        "pre-filter job descriptions — a job should contain at least 2 of these "
-        "keywords to be worth detailed analysis.\n\n"
-        "Include:\n"
-        "- Technical skills and tools (e.g. 'vulnerability management', 'aws', 'soc 2')\n"
-        "- Domain terms (e.g. 'grc', 'compliance', 'incident response')\n"
-        "- Certifications (e.g. 'security+', 'cissp', 'cisa')\n"
-        "- Role-level terms (e.g. 'security manager', 'security engineer')\n\n"
-        "Do NOT include generic terms like 'leadership', 'communication', 'team'.\n\n"
-        "Respond with ONLY a valid JSON array of lowercase strings, no commentary."
+        "Extract 50-60 keywords and short phrases organized into two tiers. "
+        "These will be used to pre-filter job descriptions before detailed scoring.\n\n"
+        "## Tier Definitions\n\n"
+        "**Core keywords** (25-30): High-signal terms that strongly indicate a relevant "
+        "job. If a job description contains 2+ of these, it's almost certainly worth "
+        "scoring. Include:\n"
+        "- Compliance frameworks the candidate has used OR could credibly work with "
+        "(SOC 2, HIPAA, GDPR, ISO 27001, NIST CSF, CMMC, PCI-DSS, FedRAMP, CCPA, etc.)\n"
+        "- Core domain terms (grc, compliance, risk management, security program, "
+        "vulnerability management, third-party risk, vendor risk, audit, controls, "
+        "security governance, information security, data protection)\n"
+        "- Security program activities (risk assessment, policy, security awareness, "
+        "access control, change management, business continuity, incident response)\n"
+        "- Role-level terms from target titles\n\n"
+        "**Supporting keywords** (25-30): Terms that appear in relevant jobs but ALSO "
+        "appear in many irrelevant jobs. Useful as confirming signal but not sufficient "
+        "alone. Include:\n"
+        "- Specific tools the candidate uses (crowdstrike, okta, vanta, qualys, rapid7, etc.)\n"
+        "- Cloud/infrastructure terms (aws, azure, cloud security, iam)\n"
+        "- Generic security terms (endpoint security, siem, firewall, encryption)\n"
+        "- Adjacent domain terms (penetration testing, security operations, soc, "
+        "detection, monitoring)\n\n"
+        "Do NOT include:\n"
+        "- Generic soft skills (leadership, communication, team player)\n"
+        "- Overly broad terms that match everything (technology, software, management)\n"
+        "- Platform-specific implementation terms (sailpoint, servicenow, workday) — "
+        "these are handled separately as negative signals\n\n"
+        "Respond with ONLY valid JSON matching this schema:\n"
+        '{"core": ["keyword1", "keyword2", ...], "supporting": ["keyword1", ...]}\n'
     )
 
     try:
@@ -167,15 +314,131 @@ async def generate_filter_keywords(
             context="keyword extraction",
         )
         cleaned = claude_client._extract_json(response)
-        keywords = json.loads(cleaned)
-        if isinstance(keywords, list):
-            keywords = [str(kw).lower().strip() for kw in keywords if kw]
-            logger.info("prefilter_keywords_generated", count=len(keywords))
+        data = json.loads(cleaned)
+
+        if isinstance(data, dict) and "core" in data and "supporting" in data:
+            core = [str(kw).lower().strip() for kw in data["core"] if kw]
+            supporting = [str(kw).lower().strip() for kw in data["supporting"] if kw]
+            logger.info(
+                "prefilter_tiered_keywords_generated",
+                core_count=len(core),
+                supporting_count=len(supporting),
+            )
+            # Return flat list for backward compat (stored together)
+            # The tiered structure is preserved in the config store
+            return core + supporting
+        elif isinstance(data, list):
+            # Fallback: Claude returned a flat list
+            keywords = [str(kw).lower().strip() for kw in data if kw]
+            logger.info("prefilter_keywords_generated_flat", count=len(keywords))
             return keywords
     except Exception as exc:
         logger.error("prefilter_keyword_generation_failed", error=str(exc))
 
     return []
+
+
+async def generate_tiered_filter_keywords(
+    claude_client: ClaudeClient,
+    supplementary_context: str | None,
+    career_objective: str | None,
+    target_titles: list[str],
+) -> dict[str, list[str]]:
+    """Use Claude to extract tiered filter keywords from the user's profile.
+
+    Returns a structured dict with 'core' and 'supporting' keyword lists
+    for use with the tiered matching logic.
+
+    Args:
+        claude_client: Configured Claude API client.
+        supplementary_context: Additional experience notes.
+        career_objective: Career objective statement.
+        target_titles: List of target job titles.
+
+    Returns:
+        Dict with 'core' and 'supporting' keyword lists.
+    """
+    from src.exceptions import ScoringError
+
+    context_parts = []
+    if target_titles:
+        context_parts.append(f"Target roles: {', '.join(target_titles)}")
+    if career_objective:
+        context_parts.append(f"Career objective: {career_objective}")
+    if supplementary_context:
+        context_parts.append(f"Experience details:\n{supplementary_context}")
+
+    if not context_parts:
+        logger.warning("prefilter_no_context_for_keywords")
+        return {"core": [], "supporting": []}
+
+    profile_text = "\n\n".join(context_parts)
+
+    system_prompt = (
+        "You extract job-matching keywords from candidate profiles. "
+        "Return only a JSON object with tiered keyword lists."
+    )
+    user_prompt = (
+        f"## Candidate Profile\n{profile_text}\n\n"
+        "Extract 50-60 keywords and short phrases organized into two tiers. "
+        "These will be used to pre-filter job descriptions before detailed scoring.\n\n"
+        "## Tier Definitions\n\n"
+        "**Core keywords** (25-30): High-signal terms that strongly indicate a relevant "
+        "job. If a job description contains 2+ of these, it's almost certainly worth "
+        "scoring. Include:\n"
+        "- Compliance frameworks the candidate has used OR could credibly work with "
+        "(SOC 2, HIPAA, GDPR, ISO 27001, NIST CSF, CMMC, PCI-DSS, FedRAMP, CCPA, etc.)\n"
+        "- Core domain terms (grc, compliance, risk management, security program, "
+        "vulnerability management, third-party risk, vendor risk, audit, controls, "
+        "security governance, information security, data protection)\n"
+        "- Security program activities (risk assessment, policy, security awareness, "
+        "access control, change management, business continuity, incident response)\n"
+        "- Role-level terms from target titles\n\n"
+        "**Supporting keywords** (25-30): Terms that appear in relevant jobs but ALSO "
+        "appear in many irrelevant jobs. Useful as confirming signal but not sufficient "
+        "alone. Include:\n"
+        "- Specific tools the candidate uses (crowdstrike, okta, vanta, qualys, rapid7, etc.)\n"
+        "- Cloud/infrastructure terms (aws, azure, cloud security, iam)\n"
+        "- Generic security terms (endpoint security, siem, firewall, encryption)\n"
+        "- Adjacent domain terms (penetration testing, security operations, soc, "
+        "detection, monitoring)\n\n"
+        "Do NOT include:\n"
+        "- Generic soft skills (leadership, communication, team player)\n"
+        "- Overly broad terms that match everything (technology, software, management)\n"
+        "- Platform-specific implementation terms (sailpoint, servicenow, workday) — "
+        "these are handled separately as negative signals\n\n"
+        "Respond with ONLY valid JSON matching this schema:\n"
+        '{"core": ["keyword1", "keyword2", ...], "supporting": ["keyword1", ...]}\n'
+    )
+
+    try:
+        response = await claude_client._call_with_retry(
+            system=system_prompt,
+            user=user_prompt,
+            error_cls=ScoringError,
+            context="tiered keyword extraction",
+        )
+        cleaned = claude_client._extract_json(response)
+        data = json.loads(cleaned)
+
+        if isinstance(data, dict) and "core" in data and "supporting" in data:
+            core = [str(kw).lower().strip() for kw in data["core"] if kw]
+            supporting = [str(kw).lower().strip() for kw in data["supporting"] if kw]
+            logger.info(
+                "prefilter_tiered_keywords_generated",
+                core_count=len(core),
+                supporting_count=len(supporting),
+            )
+            return {"core": core, "supporting": supporting}
+        elif isinstance(data, list):
+            # Fallback: split flat list roughly in half
+            keywords = [str(kw).lower().strip() for kw in data if kw]
+            mid = len(keywords) // 2
+            return {"core": keywords[:mid], "supporting": keywords[mid:]}
+    except Exception as exc:
+        logger.error("prefilter_tiered_keyword_generation_failed", error=str(exc))
+
+    return {"core": [], "supporting": []}
 
 
 # ---------------------------------------------------------------------------

@@ -29,20 +29,53 @@ RETRY_BACKOFFS = [2, 5, 10]
 # ---------------------------------------------------------------------------
 
 
+class DimensionScores(BaseModel):
+    """Individual dimension scores from the sub-dimensional scoring system.
+
+    Each dimension is scored 0-20. The sum produces the final fit_score (0-100).
+
+    Attributes:
+        skills_match: Does the candidate have the technical skills and tools listed?
+        experience_level: Is the seniority level appropriate?
+        domain_transferability: Is the candidate's domain experience relevant?
+        requirements_coverage: What proportion of stated requirements can they meet?
+        interview_likelihood: Holistic — would a recruiter put this in the "yes" pile?
+    """
+
+    skills_match: int = Field(ge=0, le=20)
+    experience_level: int = Field(ge=0, le=20)
+    domain_transferability: int = Field(ge=0, le=20)
+    requirements_coverage: int = Field(ge=0, le=20)
+    interview_likelihood: int = Field(ge=0, le=20)
+
+    @property
+    def total(self) -> int:
+        """Sum of all dimension scores (0-100)."""
+        return (
+            self.skills_match
+            + self.experience_level
+            + self.domain_transferability
+            + self.requirements_coverage
+            + self.interview_likelihood
+        )
+
+
 class FitScoreResult(BaseModel):
     """Validated response from the Claude fit scoring call.
 
     Attributes:
-        fit_score: Integer 0-100 representing job fit.
+        fit_score: Integer 0-100 representing job fit (sum of dimensions).
         rationale: Brief explanation of the score (max 200 words).
         deal_breaker_found: Whether a deal-breaker term was detected.
         deal_breaker_term: The specific deal-breaker term found, or None.
+        dimensions: Individual dimension scores for debuggability.
     """
 
     fit_score: int = Field(ge=0, le=100)
     rationale: str
     deal_breaker_found: bool
     deal_breaker_term: str | None = None
+    dimensions: DimensionScores | None = None
 
 
 class FormField(BaseModel):
@@ -88,19 +121,27 @@ class ClaudeClient:
     ) -> FitScoreResult:
         """Score how well a job matches the candidate's resume and goals.
 
+        Uses a sub-dimensional scoring approach: 5 dimensions scored 0-20 each,
+        summed to produce a final 0-100 score. This prevents score clustering
+        and provides transparent, debuggable scoring.
+
         Args:
             description: Full job description text.
             resume: Resume_Base content as plain text.
             goals: Goals_Profile as JSON string.
 
         Returns:
-            Validated FitScoreResult with score, rationale, and deal-breaker info.
+            Validated FitScoreResult with score, rationale, dimensions, and
+            deal-breaker info.
 
         Raises:
             ScoringError: If the API call fails after all retries or response
                 validation fails.
         """
-        system_prompt = "You are an expert recruiter and career coach. Analyze job fit objectively."
+        system_prompt = (
+            "You are an expert recruiter and career coach. Analyze job fit "
+            "objectively using structured dimensional scoring."
+        )
         user_prompt = (
             "## Job Description\n"
             f"{description}\n\n"
@@ -108,38 +149,81 @@ class ClaudeClient:
             f"{resume}\n\n"
             "## Career Goals\n"
             f"{goals}\n\n"
-            "Score this job's fit for the candidate on a scale of 0-100. "
-            "Use the FULL range of the scale. Scores should be well-distributed, "
-            "not clustered in the middle. Use these anchors:\n\n"
-            "90-100: Near-perfect match. Title aligns exactly with target titles, "
-            "candidate meets all listed requirements, industry matches, level is right, "
-            "salary range fits, and the role plays to the candidate's core strengths. "
-            "Would be surprised if they didn't get an interview.\n\n"
-            "75-89: Strong match. Title is close to target, candidate meets most "
-            "requirements (maybe missing one nice-to-have), relevant industry or "
-            "transferable context, appropriate seniority level. Confident application.\n\n"
-            "65-74: Good match with gaps. The role is clearly relevant but has 1-2 "
-            "meaningful gaps — slightly different specialization, adjacent industry, "
-            "or one requirement the candidate doesn't have but could learn. Worth applying.\n\n"
-            "50-64: Stretch role. The candidate could potentially do this job but would "
-            "need to lean heavily on transferable skills. Multiple gaps in stated "
-            "requirements, or the role is a level above/below, or it's a different "
-            "specialization within the same broad field. Needs human review.\n\n"
-            "30-49: Weak fit. Some surface-level keyword overlap but fundamentally "
-            "different role, wrong level, or requires deep expertise the candidate "
-            "doesn't have. Not worth applying unless desperate.\n\n"
-            "0-29: No fit. Completely different field, requires credentials the "
-            "candidate lacks (specific certifications, clearances, 10+ years in a "
-            "niche), or is clearly the wrong seniority level.\n\n"
+            "Score this job's fit for the candidate using 5 dimensions, each scored "
+            "0-20. The final fit_score is the SUM of all dimensions (0-100).\n\n"
+            "## Dimensions\n\n"
+            "### 1. Skills & Tools Match (0-20)\n"
+            "Does the candidate have the technical skills, tools, and certifications "
+            "listed in the job requirements?\n"
+            "- 16-20: Candidate has nearly all listed skills/tools or direct equivalents\n"
+            "- 12-15: Candidate has most skills, missing 1-2 that are learnable\n"
+            "- 8-11: Candidate has some relevant skills but meaningful gaps exist\n"
+            "- 4-7: Limited skill overlap, mostly adjacent/transferable\n"
+            "- 0-3: Almost no relevant skills for this role\n\n"
+            "### 2. Experience Level Fit (0-20)\n"
+            "Is the seniority level appropriate for the candidate's experience?\n"
+            "- 16-20: Level is exactly right for the candidate's years and scope\n"
+            "- 12-15: Close match, maybe slightly senior or junior but credible\n"
+            "- 8-11: One level off — candidate could stretch up or would be overqualified\n"
+            "- 4-7: Two levels off — significant mismatch in expected scope\n"
+            "- 0-3: Completely wrong level (entry-level vs director, etc.)\n\n"
+            "### 3. Domain Transferability (0-20)\n"
+            "Is the candidate's domain experience relevant to this role?\n\n"
+            "CRITICAL CALIBRATION: Security and compliance work is highly cross-functional. "
+            "Evaluate based on ACTUAL WORK PERFORMED, not title matching:\n"
+            "- Compliance framework experience transfers across ALL frameworks. Someone who "
+            "has run SOC 2 + HIPAA + GDPR programs has directly applicable methodology for "
+            "ISO 27001, NIST CSF, CMMC, PCI-DSS, FedRAMP, or any framework-based program. "
+            "These frameworks share 70-75%% of their control requirements (access management, "
+            "change management, incident response, risk assessment, vendor management).\n"
+            "- A security professional who OWNS the full security function (compliance + "
+            "infrastructure + operations) has hands-on experience across multiple "
+            "specializations: deploying/managing security tools IS security engineering, "
+            "managing vulnerability scanning IS vulnerability management, handling incidents "
+            "IS detection & response, managing cloud security IS cloud security engineering.\n"
+            "- The question is: 'Could they do this job based on what they've actually done?' "
+            "NOT 'Does their current title match the job title?'\n\n"
+            "- 16-20: Candidate's actual work experience directly covers this domain\n"
+            "- 12-15: Strong transferability — candidate has done this work as part of a "
+            "broader role or in an adjacent context\n"
+            "- 8-11: Moderate transferability — related domain but would need to deepen "
+            "in a specific area\n"
+            "- 4-7: Weak transferability — same broad field but different specialization\n"
+            "- 0-3: No meaningful domain overlap\n\n"
+            "### 4. Requirements Coverage (0-20)\n"
+            "What proportion of the job's stated requirements (must-haves and nice-to-haves) "
+            "can the candidate credibly meet?\n"
+            "- 16-20: Meets 90%%+ of requirements including all must-haves\n"
+            "- 12-15: Meets 70-89%% of requirements, all critical must-haves covered\n"
+            "- 8-11: Meets 50-69%% of requirements, some must-haves are gaps\n"
+            "- 4-7: Meets 30-49%% of requirements, multiple must-have gaps\n"
+            "- 0-3: Meets fewer than 30%% of requirements\n\n"
+            "### 5. Interview Likelihood (0-20)\n"
+            "Holistic assessment: would a recruiter reviewing this resume for this specific "
+            "role put it in the 'yes' pile for a phone screen?\n"
+            "- 16-20: Very likely — strong match, recruiter would be excited\n"
+            "- 12-15: Probable — solid candidate, would make the first cut\n"
+            "- 8-11: Possible — depends on applicant pool strength\n"
+            "- 4-7: Unlikely — would need a thin applicant pool\n"
+            "- 0-3: Would not get a callback\n\n"
+            "## Deal-Breaker Check\n"
             "For deal_breaker_found: only set to true if the JOB ITSELF requires or "
-            "is at a level matching a deal-breaker term. For example, if 'Associate' is "
-            "a deal-breaker, only flag it if the role IS an associate-level position, "
-            "NOT if the word 'associate' appears in other contexts like 'associate with "
-            "teams' or 'Associate's degree preferred'.\n\n"
-            "Respond with ONLY valid JSON (no markdown, no explanation) matching this schema:\n"
+            "is at a level matching a deal-breaker term from the candidate's goals. "
+            "For example, if 'Associate' is a deal-breaker, only flag it if the role "
+            "IS an associate-level position, NOT if the word appears in other contexts "
+            "like 'associate with teams' or 'Associate's degree preferred'.\n\n"
+            "## Response Format\n"
+            "Respond with ONLY valid JSON (no markdown, no explanation):\n"
             "{\n"
-            '  "fit_score": <integer 0-100>,\n'
-            '  "rationale": "<string, max 200 words>",\n'
+            '  "dimensions": {\n'
+            '    "skills_match": <int 0-20>,\n'
+            '    "experience_level": <int 0-20>,\n'
+            '    "domain_transferability": <int 0-20>,\n'
+            '    "requirements_coverage": <int 0-20>,\n'
+            '    "interview_likelihood": <int 0-20>\n'
+            "  },\n"
+            '  "fit_score": <int, MUST equal sum of all 5 dimensions>,\n'
+            '  "rationale": "<string, max 200 words explaining the key factors>",\n'
             '  "deal_breaker_found": <boolean>,\n'
             '  "deal_breaker_term": "<string or null>"\n'
             "}"
@@ -156,9 +240,23 @@ class ClaudeClient:
             # Claude sometimes wraps JSON in markdown code blocks
             cleaned = self._extract_json(response_text)
             data = json.loads(cleaned)
+
+            # Validate dimensions and compute/verify fit_score from sum
+            if "dimensions" in data:
+                dims = DimensionScores.model_validate(data["dimensions"])
+                computed_score = dims.total
+                # Use the computed sum as the authoritative score
+                data["fit_score"] = computed_score
+                data["dimensions"] = dims
+            else:
+                # Fallback: if Claude omits dimensions, still accept the score
+                data["dimensions"] = None
+
             return FitScoreResult.model_validate(data)
         except (json.JSONDecodeError, ValidationError) as exc:
-            raise ScoringError(message=f"Failed to parse fit scoring response: {exc}") from exc
+            raise ScoringError(
+                message=f"Failed to parse fit scoring response: {exc}"
+            ) from exc
 
     async def tailor_resume(
         self,

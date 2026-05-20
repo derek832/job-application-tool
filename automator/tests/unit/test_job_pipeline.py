@@ -391,7 +391,13 @@ async def test_pipeline_calls_all_stages_in_order(async_session: AsyncSession):
                 job_id="job_001",
                 title="Engineer",
                 company="Acme",
-                description="A great job with lots of Python work and more details here.",
+                description=(
+                    "A great job with lots of Python work. We are looking for a "
+                    "Security Engineer to join our team and help build our compliance "
+                    "program including SOC 2, HIPAA, and risk management. You will "
+                    "manage vulnerability scanning, incident response, and work with "
+                    "AWS infrastructure. Experience with GRC tools preferred."
+                ),
                 linkedin_url="https://www.linkedin.com/jobs/view/job_001",
             )
         ]
@@ -528,21 +534,34 @@ async def test_pipeline_blacklist_skips_matched_jobs(async_session: AsyncSession
                     job_id="bl_1",
                     title="Software Engineer",
                     company="Revature",
-                    description="A job at Revature.",
+                    description=(
+                        "A job at Revature. We are looking for engineers to join our "
+                        "training program and work on enterprise software projects with "
+                        "compliance requirements including SOC 2 and security controls."
+                    ),
                     linkedin_url="https://www.linkedin.com/jobs/view/bl_1",
                 ),
                 DiscoveredJob(
                     job_id="bl_2",
                     title="Software Engineering Intern",
                     company="Good Corp",
-                    description="An internship position.",
+                    description=(
+                        "An internship position for students interested in security "
+                        "engineering and compliance automation. Work with GRC tools "
+                        "and help build our vulnerability management program."
+                    ),
                     linkedin_url="https://www.linkedin.com/jobs/view/bl_2",
                 ),
                 DiscoveredJob(
                     job_id="bl_3",
                     title="Senior Engineer",
                     company="Great Inc",
-                    description="A great senior role.",
+                    description=(
+                        "A great senior role working on security infrastructure and "
+                        "compliance programs. You will manage SOC 2 audits, implement "
+                        "security controls, and work with AWS and vulnerability scanning "
+                        "tools to protect our cloud environment."
+                    ),
                     linkedin_url="https://www.linkedin.com/jobs/view/bl_3",
                 ),
             ],
