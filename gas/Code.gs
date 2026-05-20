@@ -187,9 +187,9 @@ function handleTailorAndExport(replacements) {
 
 /**
  * Safely replaces text within a document body without disrupting formatting.
- * Instead of body.replaceText() which can bleed bold/italic across boundaries,
- * this finds the text element containing the match and replaces only within
- * that element's text, preserving all character-level formatting.
+ * Captures the formatting state of the original text BEFORE any modifications,
+ * then explicitly applies that formatting to the replacement text after insertion.
+ * This prevents formatting bleed from adjacent underlined/bold elements.
  *
  * @param {Body} body - The document body.
  * @param {string} findText - Exact text to find.
@@ -210,40 +210,22 @@ function safeReplace(body, findText, replaceWith) {
   // Get the Text object
   var textObj = element.asText();
 
-  // Delete the found text range and insert the replacement at the same position.
-  // This preserves the formatting of the surrounding text.
-  // The replacement inherits formatting from the character at startOffset.
-  // To avoid bold bleed: check if the start is bold but the content shouldn't be.
-  var isBoldAtStart = textObj.isBold(startOffset);
-  var fullText = textObj.getText();
+  // Capture formatting state BEFORE any modifications
+  // Use the middle of the matched text to avoid boundary effects
+  var sampleOffset = Math.min(startOffset + 1, endOffset);
+  var wasBold = textObj.isBold(sampleOffset);
+  var wasUnderline = textObj.isUnderline(sampleOffset);
+  var wasItalic = textObj.isItalic(sampleOffset);
 
-  // Build new full text with the replacement spliced in
-  var before = fullText.substring(0, startOffset);
-  var after = fullText.substring(endOffset + 1);
-  var newFullText = before + replaceWith + after;
-
-  // Set the text (this preserves formatting for unchanged portions)
-  var isUnderlineAtStart = textObj.isUnderline(startOffset);
+  // Perform the replacement
   textObj.deleteText(startOffset, endOffset);
   textObj.insertText(startOffset, replaceWith);
 
-  // The inserted text inherits formatting from the character at startOffset.
-  // If the original text was NOT underlined, clear underline on the replacement
-  // to prevent formatting bleed from adjacent underlined text.
-  if (!isUnderlineAtStart) {
-    textObj.setUnderline(startOffset, startOffset + replaceWith.length - 1, false);
-  }
-
-  // If the character BEFORE the start is not bold but start is bold,
-  // the replacement is at a boundary — keep the replacement non-bold
-  // to match the majority of the replaced content's style.
-  if (startOffset > 0) {
-    var isBoldBefore = textObj.isBold(startOffset - 1);
-    if (!isBoldBefore && isBoldAtStart) {
-      // The find text started at a bold boundary — make replacement non-bold
-      textObj.setBold(startOffset, startOffset + replaceWith.length - 1, false);
-    }
-  }
+  // Explicitly set formatting on the entire replacement to match the original
+  var replaceEnd = startOffset + replaceWith.length - 1;
+  textObj.setBold(startOffset, replaceEnd, wasBold);
+  textObj.setUnderline(startOffset, replaceEnd, wasUnderline);
+  textObj.setItalic(startOffset, replaceEnd, wasItalic);
 
   return true;
 }
