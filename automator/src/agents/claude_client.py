@@ -94,9 +94,55 @@ class FormField(BaseModel):
     suggested_value: str | None = None
 
 
+class VisualFormField(BaseModel):
+    """A form field identified with pixel coordinates for visual interaction.
+
+    Used by the coordinate-based form filling system. Claude Vision analyzes
+    a screenshot and returns bounding boxes and click targets for each field.
+
+    Attributes:
+        label: The visible label text for the field.
+        field_type: Type of interactive element (text, select, checkbox, radio,
+            textarea, file, button).
+        bbox: Bounding box as [x, y, width, height] in pixels from top-left.
+        center: Click target as [x, y] pixel coordinates.
+        suggested_value: Value to fill based on user profile, or None.
+        confidence: 0.0-1.0 confidence that this is an interactive field.
+        is_required: Whether the field appears to be required (asterisk, "required" text).
+        current_value: Any pre-filled value visible in the field, or None.
+    """
+
+    label: str
+    field_type: str
+    bbox: list[int] = Field(min_length=4, max_length=4)
+    center: list[int] = Field(min_length=2, max_length=2)
+    suggested_value: str | None = None
+    confidence: float = Field(ge=0.0, le=1.0)
+    is_required: bool = False
+    current_value: str | None = None
+
+
 # ---------------------------------------------------------------------------
 # Claude API client
 # ---------------------------------------------------------------------------
+
+
+class UsageResult(BaseModel):
+    """Token usage and cost from a single Claude API call."""
+
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cost_usd: float = 0.0
+
+
+# Pricing per million tokens (Claude Sonnet 4)
+_INPUT_COST_PER_M = 3.0
+_OUTPUT_COST_PER_M = 15.0
+
+
+def _calculate_cost(input_tokens: int, output_tokens: int) -> float:
+    """Calculate USD cost from token counts."""
+    return (input_tokens * _INPUT_COST_PER_M + output_tokens * _OUTPUT_COST_PER_M) / 1_000_000
 
 
 class ClaudeClient:
@@ -106,12 +152,17 @@ class ClaudeClient:
     All methods validate responses against Pydantic schemas and retry
     on transient API errors.
 
+    Tracks cumulative token usage and cost across all API calls made through
+    this instance via the ``total_cost_usd`` and ``last_call_cost`` attributes.
+
     Args:
         api_key: The Anthropic API key. Never logged.
     """
 
     def __init__(self, api_key: str) -> None:
         self._client = anthropic.AsyncAnthropic(api_key=api_key)
+        self.total_cost_usd: float = 0.0
+        self.last_call_cost: float = 0.0
 
     async def score_fit(
         self,
@@ -297,9 +348,7 @@ class ClaudeClient:
 
             return FitScoreResult.model_validate(data)
         except (json.JSONDecodeError, ValidationError) as exc:
-            raise ScoringError(
-                message=f"Failed to parse fit scoring response: {exc}"
-            ) from exc
+            raise ScoringError(message=f"Failed to parse fit scoring response: {exc}") from exc
 
     async def tailor_resume(
         self,
@@ -489,6 +538,191 @@ class ClaudeClient:
         except (json.JSONDecodeError, ValidationError) as exc:
             raise VisionAgentError(message=f"Failed to parse form field response: {exc}") from exc
 
+    async def identify_fields_visual(
+        self,
+        screenshot_bytes: bytes,
+        profile: str,
+        viewport_width: int,
+        viewport_height: int,
+        job_description: str | None = None,
+        filled_labels: list[str] | None = None,
+    ) -> list[VisualFormField]:
+        """Identify form fields with pixel coordinates for visual interaction.
+
+        Sends a screenshot to Claude Vision and asks it to identify all
+        interactive form elements with their bounding boxes and click targets.
+        This enables coordinate-based form filling that works regardless of
+        DOM structure (shadow DOM, custom components, etc.).
+
+        Args:
+            screenshot_bytes: Raw PNG screenshot bytes of the current viewport.
+            profile: User profile data as JSON string for value suggestions.
+            viewport_width: Width of the viewport in pixels.
+            viewport_height: Height of the viewport in pixels.
+            job_description: Optional job description for context on how to
+                answer job-specific questions.
+            filled_labels: Labels of fields already filled (to avoid re-filling).
+
+        Returns:
+            List of VisualFormField objects with coordinates and suggested values.
+
+        Raises:
+            VisionAgentError: If the API call fails or response parsing fails.
+        """
+        image_b64 = base64.b64encode(screenshot_bytes).decode("utf-8")
+
+        system_prompt = (
+            "You are an expert at identifying interactive form elements in web page "
+            "screenshots. You analyze screenshots pixel-by-pixel to locate form fields, "
+            "buttons, dropdowns, checkboxes, and file upload areas. You return precise "
+            "bounding boxes and click coordinates for each element."
+        )
+
+        filled_context = ""
+        if filled_labels:
+            filled_context = f"\n\nFields already filled (skip these): {', '.join(filled_labels)}\n"
+
+        job_context = ""
+        if job_description:
+            # Truncate to avoid token bloat
+            truncated_desc = job_description[:1000]
+            job_context = (
+                f"\n\n## Job Description (for answering job-specific questions)\n"
+                f"{truncated_desc}\n"
+            )
+
+        user_content = [
+            {
+                "type": "image",
+                "source": {
+                    "type": "base64",
+                    "media_type": "image/png",
+                    "data": image_b64,
+                },
+            },
+            {
+                "type": "text",
+                "text": (
+                    f"Screenshot viewport: {viewport_width}x{viewport_height} pixels\n\n"
+                    f"## User Profile\n{profile}\n"
+                    f"{job_context}"
+                    f"{filled_context}\n"
+                    "Identify ALL interactive form elements visible in this screenshot. "
+                    "For each element, provide:\n"
+                    "- label: the visible label text (or placeholder/button text)\n"
+                    "- field_type: one of: text, select, checkbox, radio, textarea, file, button\n"
+                    "- bbox: [x, y, width, height] in pixels from top-left corner\n"
+                    "- center: [x, y] pixel coordinates of the CENTER of the clickable area "
+                    "(where a user would click to focus/activate the field)\n"
+                    "- suggested_value: the value to type/select based on the user profile, "
+                    "or null if you cannot determine an appropriate value\n"
+                    "- confidence: 0.0-1.0 how confident you are this is an interactive element\n"
+                    "- is_required: true if the field has an asterisk (*) or 'required' indicator\n"
+                    "- current_value: any text already visible inside the field, or null\n\n"
+                    "IMPORTANT RULES:\n"
+                    "- Include submit/next/continue buttons as field_type='button'\n"
+                    "- For dropdowns (select), the center should be the dropdown trigger\n"
+                    "- For checkboxes/radios, center should be the checkbox/radio itself\n"
+                    "- For file uploads, center should be the 'Choose File' or upload button\n"
+                    "- Skip navigation links, headers, and non-form elements\n"
+                    "- Skip fields that already have values filled in (current_value is set)\n"
+                    "- Coordinates must be within the viewport bounds\n"
+                    "- Be precise with coordinates — off by 20+ pixels will miss the target\n\n"
+                    "Respond with ONLY a valid JSON array, no commentary."
+                ),
+            },
+        ]
+
+        response_text = await self._call_with_retry_vision(
+            system=system_prompt,
+            user_content=user_content,
+            error_cls=VisionAgentError,
+            context="visual form field identification",
+        )
+
+        try:
+            cleaned = self._extract_json(response_text)
+            data = json.loads(cleaned)
+            if not isinstance(data, list):
+                raise VisionAgentError(
+                    message="Expected JSON array from visual field identification"
+                )
+            return [VisualFormField.model_validate(item) for item in data]
+        except (json.JSONDecodeError, ValidationError) as exc:
+            raise VisionAgentError(
+                message=f"Failed to parse visual form field response: {exc}"
+            ) from exc
+
+    async def verify_form_state(
+        self,
+        screenshot_bytes: bytes,
+        viewport_width: int,
+        viewport_height: int,
+        expected_fills: list[dict[str, str]],
+    ) -> dict[str, bool]:
+        """Verify that form fields were filled correctly by analyzing a screenshot.
+
+        Takes a screenshot after filling and checks whether the expected values
+        are visible in the form fields.
+
+        Args:
+            screenshot_bytes: PNG screenshot taken after filling fields.
+            viewport_width: Viewport width in pixels.
+            viewport_height: Viewport height in pixels.
+            expected_fills: List of dicts with 'label' and 'value' keys.
+
+        Returns:
+            Dict mapping field labels to whether they appear correctly filled.
+
+        Raises:
+            VisionAgentError: If the API call fails.
+        """
+        image_b64 = base64.b64encode(screenshot_bytes).decode("utf-8")
+
+        fills_text = "\n".join(
+            f"- {f['label']}: expected value = \"{f['value']}\"" for f in expected_fills
+        )
+
+        user_content = [
+            {
+                "type": "image",
+                "source": {
+                    "type": "base64",
+                    "media_type": "image/png",
+                    "data": image_b64,
+                },
+            },
+            {
+                "type": "text",
+                "text": (
+                    f"Screenshot viewport: {viewport_width}x{viewport_height} pixels\n\n"
+                    "I just filled the following form fields. Verify each one by checking "
+                    "if the expected value is visible in the field:\n\n"
+                    f"{fills_text}\n\n"
+                    "For each field, respond with a JSON object mapping the field label "
+                    "to true (value is visible and correct) or false (field appears empty, "
+                    "has wrong value, or cannot be found).\n\n"
+                    "Respond with ONLY a valid JSON object, no commentary."
+                ),
+            },
+        ]
+
+        response_text = await self._call_with_retry_vision(
+            system="You verify form field values by analyzing screenshots.",
+            user_content=user_content,
+            error_cls=VisionAgentError,
+            context="form state verification",
+        )
+
+        try:
+            cleaned = self._extract_json(response_text)
+            data = json.loads(cleaned)
+            if not isinstance(data, dict):
+                return {f["label"]: False for f in expected_fills}
+            return data
+        except (json.JSONDecodeError, ValidationError):
+            return {f["label"]: False for f in expected_fills}
+
     # -----------------------------------------------------------------------
     # Internal retry helpers
     # -----------------------------------------------------------------------
@@ -559,6 +793,19 @@ class ClaudeClient:
                     system=system,
                     messages=[{"role": "user", "content": user}],
                 )
+                # Track cost from usage data
+                usage = response.usage
+                call_cost = _calculate_cost(usage.input_tokens, usage.output_tokens)
+                self.last_call_cost = call_cost
+                self.total_cost_usd += call_cost
+                logger.info(
+                    "claude_api_cost",
+                    context=context,
+                    input_tokens=usage.input_tokens,
+                    output_tokens=usage.output_tokens,
+                    cost_usd=round(call_cost, 6),
+                    total_cost_usd=round(self.total_cost_usd, 6),
+                )
                 return response.content[0].text
             except anthropic.APIError as exc:
                 last_error = exc
@@ -608,6 +855,19 @@ class ClaudeClient:
                     max_tokens=4096,
                     system=system,
                     messages=[{"role": "user", "content": user_content}],
+                )
+                # Track cost from usage data
+                usage = response.usage
+                call_cost = _calculate_cost(usage.input_tokens, usage.output_tokens)
+                self.last_call_cost = call_cost
+                self.total_cost_usd += call_cost
+                logger.info(
+                    "claude_api_cost",
+                    context=context,
+                    input_tokens=usage.input_tokens,
+                    output_tokens=usage.output_tokens,
+                    cost_usd=round(call_cost, 6),
+                    total_cost_usd=round(self.total_cost_usd, 6),
                 )
                 return response.content[0].text
             except anthropic.APIError as exc:

@@ -784,24 +784,85 @@ async def process_external_apply(
     # Submit the form (or skip if dry_run)
     notes = _json.dumps(filled_details, indent=2) if filled_details else None
 
-    # If no DOM fields were found at all, this is where vision would be needed
+    # If no DOM fields were found at all, fall back to visual form filling
     if total_dom_fields_found == 0:
-        log.warning("dom_extraction_failed_completely", domain=domain)
+        log.info("dom_extraction_failed_switching_to_visual", domain=domain)
+        from src.agents.visual_form_filler import fill_form_visually
+
+        visual_result = await fill_form_visually(
+            page=page,
+            claude_client=claude_client,
+            profile=profile,
+            resume_pdf_path=job_record.tailored_resume_pdf,
+            min_salary=min_salary,
+            job_description=job_record.description,
+            dry_run=dry_run,
+        )
         await _log_external_apply(
             session,
             job_record.id,
             domain,
-            "none",
+            "visual",
             0,
-            0,
-            0,
-            "failed",
-            "no_dom_fields",
+            visual_result.fields_found,
+            visual_result.fields_filled,
+            "submitted" if visual_result.ok else "failed",
+            visual_result.reason if not visual_result.ok else None,
         )
+        if visual_result.ok:
+            return Result(
+                ok=True,
+                application_notes=_json.dumps(visual_result.application_notes, indent=2),
+            )
         return Result(
             ok=False,
-            error="No form fields found via DOM extraction",
-            reason="no_dom_fields",
+            error=visual_result.error,
+            reason=visual_result.reason,
+        )
+
+    # Check fill rate — if DOM approach filled less than 40% of fields,
+    # fall back to visual approach for better coverage
+    non_file_fields = [f for f in fill_plan if f.get("type") != "file"]
+    fill_rate = total_filled_count / max(len(non_file_fields), 1)
+    if fill_rate < 0.4 and len(non_file_fields) > 2:
+        log.info(
+            "low_dom_fill_rate_switching_to_visual",
+            fill_rate=f"{fill_rate:.0%}",
+            filled=total_filled_count,
+            total=len(non_file_fields),
+            domain=domain,
+        )
+        from src.agents.visual_form_filler import fill_form_visually
+
+        visual_result = await fill_form_visually(
+            page=page,
+            claude_client=claude_client,
+            profile=profile,
+            resume_pdf_path=job_record.tailored_resume_pdf,
+            min_salary=min_salary,
+            job_description=job_record.description,
+            dry_run=dry_run,
+        )
+        await _log_external_apply(
+            session,
+            job_record.id,
+            domain,
+            "visual_fallback",
+            total_dom_fields_found,
+            visual_result.fields_found,
+            visual_result.fields_filled,
+            "submitted" if visual_result.ok else "failed",
+            visual_result.reason if not visual_result.ok else None,
+        )
+        if visual_result.ok:
+            return Result(
+                ok=True,
+                application_notes=_json.dumps(visual_result.application_notes, indent=2),
+            )
+        return Result(
+            ok=False,
+            error=visual_result.error,
+            reason=visual_result.reason,
         )
 
     if dry_run:
