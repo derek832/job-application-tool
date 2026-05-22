@@ -674,13 +674,24 @@ async def run_pipeline(session: AsyncSession | None = None) -> None:
                             # High-match: attempt auto-submission via Vision Agent
                             from src.agents.vision_agent import process_external_apply
 
+                            cost_before_ext = claude_client.total_cost_usd
                             result = await process_external_apply(
                                 job_record=job_record,
                                 profile=user_profile,
                                 page=page,
                                 claude_client=claude_client,
                                 min_salary=goals_profile.min_salary,
+                                session=session,
+                                notification_settings=notification_settings,
+                                goals_profile_json=goals_json,
+                                supplementary_context=goals_profile.supplementary_context,
                             )
+                            ext_cost = claude_client.total_cost_usd - cost_before_ext
+                            if ext_cost > 0:
+                                existing_cost = float(job_record.claude_cost_usd or "0")
+                                job_record.claude_cost_usd = str(
+                                    round(existing_cost + ext_cost, 6)
+                                )
                             if result.ok:
                                 from src.db.job_repo import update_job_status
 
@@ -699,6 +710,18 @@ async def run_pipeline(session: AsyncSession | None = None) -> None:
                                 )
 
                                 await mark_as_applied_on_linkedin(page, job_record.linkedin_url)
+                            elif result.reason == "escalation_created":
+                                # Escalation was created — pipeline is paused for this job
+                                # Job status is managed by the escalation engine
+                                from src.db.job_repo import update_job_status
+
+                                job_record.queue_reason = "escalation_pending"
+                                await update_job_status(
+                                    session,
+                                    job_record.id,
+                                    "human_queue",
+                                    reason=f"Escalation created: {result.error}",
+                                )
                             else:
                                 from src.db.job_repo import update_job_status
 
@@ -797,7 +820,13 @@ async def run_pipeline(session: AsyncSession | None = None) -> None:
             pass
 
     # Step 12: Generate and publish run summary
-    await _generate_and_publish_run_summary(session, notification_settings)
+    last_run_at: str | None = (
+        system_state.get("last_run_at") if system_state else None
+    )
+    await _generate_and_publish_run_summary(
+        session, notification_settings, run_id, last_run_at,
+        claude_cost_usd=claude_client.total_cost_usd if claude_client else 0.0,
+    )
 
     # Step 13: Update system_state.last_run_at
     now_iso = datetime.now(UTC).isoformat()
@@ -991,43 +1020,84 @@ async def _build_notification_settings(
 async def _generate_and_publish_run_summary(
     session: AsyncSession,
     notification_settings: NotificationSettings,
+    run_id: str,
+    last_run_at: str | None,
+    claude_cost_usd: float = 0.0,
 ) -> None:
-    """Generate run statistics, store the summary, and publish to ntfy info topic.
+    """Generate delta-based run statistics, store the summary, and publish to ntfy.
 
-    Queries the database for jobs processed in the current run window and
-    computes aggregate statistics. Generates a plain-English summary, stores
-    it in the run_summaries table, and publishes it to the ntfy info topic.
+    Computes stats based only on NEW activity this run:
+    - Jobs discovered/scored/applied/skipped/escalated THIS run (by run_id)
+    - Jobs that transitioned to 'applied' since the previous run ended but
+      were approved from the Human Queue (inter-run activity)
 
     Args:
         session: Active async database session.
         notification_settings: Unified notification settings for publishing.
+        run_id: The unique identifier for this pipeline run.
+        last_run_at: ISO 8601 timestamp of when the previous run completed,
+            or None if this is the first run.
     """
     try:
-        # Query job counts by status to build run stats
         from sqlalchemy import func
 
-        # Get counts of jobs by their current status
+        from src.db.models import StatusTransition
+
+        # --- Delta stats for THIS run (jobs tagged with this run_id) ---
         result = await session.execute(
-            select(JobRecord.status, func.count(JobRecord.id)).group_by(JobRecord.status)
+            select(JobRecord.status, func.count(JobRecord.id))
+            .where(JobRecord.run_id == run_id)
+            .group_by(JobRecord.status)
         )
         status_counts: dict[str, int] = dict(result.all())
 
-        stats = RunStats(
-            jobs_discovered=sum(status_counts.values()),
-            jobs_scored=status_counts.get("scored", 0)
+        jobs_discovered = sum(status_counts.values())
+        jobs_scored = (
+            status_counts.get("scored", 0)
             + status_counts.get("approved_for_apply", 0)
             + status_counts.get("applying", 0)
             + status_counts.get("applied", 0)
             + status_counts.get("apply_failed", 0)
-            + status_counts.get("resume_failed", 0),
-            jobs_approved=status_counts.get("approved_for_apply", 0)
+            + status_counts.get("resume_failed", 0)
+            + status_counts.get("skipped", 0)
+        )
+        jobs_approved = (
+            status_counts.get("approved_for_apply", 0)
             + status_counts.get("applying", 0)
-            + status_counts.get("applied", 0),
-            jobs_applied=status_counts.get("applied", 0),
-            jobs_skipped=status_counts.get("skipped", 0),
-            jobs_escalated=status_counts.get("scored", 0)
-            + status_counts.get("apply_failed", 0)
-            + status_counts.get("resume_failed", 0),
+            + status_counts.get("applied", 0)
+        )
+        jobs_applied = status_counts.get("applied", 0)
+        jobs_skipped = status_counts.get("skipped", 0)
+        jobs_escalated = status_counts.get("scored", 0) + status_counts.get(
+            "apply_failed", 0
+        ) + status_counts.get("resume_failed", 0)
+
+        # --- Inter-run activity: jobs approved from queue then applied ---
+        # These are jobs that were NOT discovered this run but transitioned
+        # to 'applied' since the last run completed (user approved from queue)
+        jobs_applied_from_queue = 0
+        if last_run_at:
+            queue_applied_result = await session.execute(
+                select(func.count(StatusTransition.id))
+                .where(
+                    StatusTransition.to_status == "applied",
+                    StatusTransition.timestamp > last_run_at,
+                    StatusTransition.job_id.notin_(
+                        select(JobRecord.id).where(JobRecord.run_id == run_id)
+                    ),
+                )
+            )
+            jobs_applied_from_queue = queue_applied_result.scalar() or 0
+
+        stats = RunStats(
+            jobs_discovered=jobs_discovered,
+            jobs_scored=jobs_scored,
+            jobs_approved=jobs_approved,
+            jobs_applied=jobs_applied,
+            jobs_skipped=jobs_skipped,
+            jobs_escalated=jobs_escalated,
+            jobs_applied_from_queue=jobs_applied_from_queue,
+            claude_cost_usd=claude_cost_usd,
             errors=[],
         )
 
@@ -1039,6 +1109,7 @@ async def _generate_and_publish_run_summary(
         logger.info(
             "pipeline_run_summary_published",
             summary=summary_text[:100],
+            run_id=run_id,
         )
     except Exception as exc:
         logger.error("pipeline_run_summary_failed", error=str(exc))

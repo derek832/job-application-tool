@@ -6,6 +6,11 @@ unrecognized fields, salary missing, and multi-page forms (>3 pages).
 
 All values are sanitized before being typed into form fields to prevent
 injection via malicious job postings.
+
+Integrates with the Escalation Engine for:
+- CAPTCHA detection → creates escalation with tier="captcha"
+- Open-ended fields on high-score jobs → creates escalation with tier="human_review"
+- Open-ended fields on lower-score jobs → auto-fills with Claude drafts
 """
 
 from __future__ import annotations
@@ -15,6 +20,7 @@ import json as _json
 import re
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from typing import TYPE_CHECKING
 
 import structlog
 from playwright.async_api import Frame, Page
@@ -23,6 +29,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.agents.claude_client import ClaudeClient, FormField
 from src.api.schemas import UserProfile
 from src.db.models import ExternalApplyLog, JobRecord
+
+if TYPE_CHECKING:
+    from src.pipeline.notification_service import NotificationSettings
 
 logger = structlog.get_logger()
 
@@ -340,6 +349,9 @@ async def process_external_apply(
     min_salary: int | None = None,
     dry_run: bool = False,
     session: AsyncSession | None = None,
+    notification_settings: NotificationSettings | None = None,
+    goals_profile_json: str | None = None,
+    supplementary_context: str | None = None,
 ) -> Result:
     """Process an external job application using DOM-based form detection.
 
@@ -353,6 +365,12 @@ async def process_external_apply(
 
     Falls back to Claude Vision only if DOM extraction finds no fields.
 
+    Integrates with the Escalation Engine:
+    - CAPTCHA detected → creates escalation with tier="captcha", pauses pipeline
+    - Open-ended fields + fit_score >= threshold → creates escalation with
+      tier="human_review", pauses pipeline
+    - Open-ended fields + fit_score < threshold → auto-fills with Claude drafts
+
     Args:
         job_record: The job record with external_url to apply to.
         profile: The user's profile configuration for form filling.
@@ -360,6 +378,10 @@ async def process_external_apply(
         claude_client: The Claude API client for field identification.
         min_salary: The user's minimum salary from GoalsProfile, or None.
         dry_run: If True, fills the form but does not click submit.
+        session: Active SQLAlchemy async session for DB operations.
+        notification_settings: Notification channel configuration for escalations.
+        goals_profile_json: User's goals profile as JSON string for draft generation.
+        supplementary_context: Additional experience context for draft generation.
 
     Returns:
         Result indicating success or failure with escalation reason.
@@ -454,11 +476,27 @@ async def process_external_apply(
                 "escalated",
                 "captcha_detected",
             )
-            return Result(
-                ok=False,
-                error=f"CAPTCHA detected on {page_type} page for {domain}",
-                reason="captcha_detected",
+            # Route through Escalation Engine if session and notification_settings available
+            escalation_result = await _handle_captcha_escalation(
+                session=session,
+                job_record=job_record,
+                page=page,
+                notification_settings=notification_settings,
+                log=log,
             )
+            if escalation_result is not None:
+                if escalation_result.ok:
+                    # CAPTCHA was resolved — continue processing
+                    pass
+                else:
+                    return escalation_result
+            else:
+                # Escalation infra unavailable — fall back to legacy behavior
+                return Result(
+                    ok=False,
+                    error=f"CAPTCHA detected on {page_type} page for {domain}",
+                    reason="captcha_detected",
+                )
 
     if page_type == "google_oauth":
         log.info("detected_google_oauth", domain=domain)
@@ -605,11 +643,46 @@ async def process_external_apply(
                 "escalated",
                 "captcha_detected",
             )
-            return Result(
-                ok=False,
-                error="CAPTCHA detected on application form",
-                reason="captcha_detected",
+            # Route through Escalation Engine if session and notification_settings available
+            escalation_result = await _handle_captcha_escalation(
+                session=session,
+                job_record=job_record,
+                page=page,
+                notification_settings=notification_settings,
+                log=log,
             )
+            if escalation_result is not None:
+                if escalation_result.ok:
+                    # CAPTCHA was resolved — continue processing this page
+                    pass
+                else:
+                    return escalation_result
+            else:
+                # Escalation infra unavailable — fall back to legacy behavior
+                return Result(
+                    ok=False,
+                    error="CAPTCHA detected on application form",
+                    reason="captcha_detected",
+                )
+
+        # Detect open-ended fields and route through escalation or auto-fill
+        open_ended_result = await _handle_open_ended_fields(
+            session=session,
+            job_record=job_record,
+            dom_fields=dom_fields,
+            page=page,
+            claude_client=claude_client,
+            notification_settings=notification_settings,
+            goals_profile_json=goals_profile_json,
+            supplementary_context=supplementary_context,
+            log=log,
+        )
+        if open_ended_result is not None:
+            if not open_ended_result.ok:
+                # Escalation was created — pipeline is paused
+                return open_ended_result
+            # Auto-fill happened successfully — open_ended_result.application_notes
+            # contains the auto-filled fields info; continue with normal flow
 
         # Map fields to profile values
         fill_plan = _build_fill_plan(dom_fields, profile, min_salary)
@@ -949,6 +1022,304 @@ async def process_external_apply(
         "submitted",
     )
     return Result(ok=True, application_notes=notes)
+
+
+# ---------------------------------------------------------------------------
+# Escalation Integration Helpers
+# ---------------------------------------------------------------------------
+
+
+async def _handle_captcha_escalation(
+    *,
+    session: AsyncSession | None,
+    job_record: JobRecord,
+    page: Page,
+    notification_settings: NotificationSettings | None,
+    log,
+) -> Result | None:
+    """Create a CAPTCHA escalation if session and notification_settings are available.
+
+    Routes through the Escalation Engine to pause the pipeline and notify the
+    user, rather than immediately failing. If the escalation infrastructure is
+    not available (no session or no notification_settings), returns None to
+    fall back to the legacy behavior.
+
+    Args:
+        session: Active SQLAlchemy async session, or None.
+        job_record: The job record being applied to.
+        page: Playwright Page instance where CAPTCHA was detected.
+        notification_settings: Notification channel configuration, or None.
+        log: Bound structlog logger.
+
+    Returns:
+        A Result indicating escalation was created (ok=False, reason="escalation_created"),
+        or None if escalation infrastructure is unavailable.
+
+    Validates: Requirements 1.1
+    """
+    if session is None or notification_settings is None:
+        return None
+
+    try:
+        from src.pipeline.escalation_engine import create_escalation
+
+        # Capture minimal form state snapshot for CAPTCHA escalation
+        form_state_snapshot = {
+            "external_url": job_record.external_url,
+            "fields": [],
+            "screenshot_path": None,
+            "page_title": await page.title() if page else None,
+        }
+
+        escalation_record = await create_escalation(
+            session=session,
+            job_record=job_record,
+            tier="captcha",
+            form_state_snapshot=form_state_snapshot,
+            draft_answers=None,
+            page=page,
+            notification_settings=notification_settings,
+        )
+
+        log.info(
+            "captcha_escalation_created",
+            escalation_id=escalation_record.id,
+            job_id=job_record.id,
+        )
+
+        # Start polling for CAPTCHA resolution in the background
+        from src.pipeline.escalation_engine import poll_captcha_resolution
+
+        resolved = await poll_captcha_resolution(
+            page=page,
+            escalation_id=escalation_record.id,
+            session=session,
+        )
+
+        if resolved:
+            log.info(
+                "captcha_resolved_resuming",
+                escalation_id=escalation_record.id,
+            )
+            # CAPTCHA was solved — signal caller to continue processing
+            return Result(ok=True)
+
+        # Polling timed out (30 min) — escalation remains pending
+        return Result(
+            ok=False,
+            error="CAPTCHA escalation created — awaiting user resolution",
+            reason="escalation_created",
+        )
+
+    except Exception as exc:
+        log.error(
+            "captcha_escalation_failed",
+            error=str(exc),
+            exc_info=True,
+        )
+        # Fall back to legacy behavior
+        return None
+
+
+async def _handle_open_ended_fields(
+    *,
+    session: AsyncSession | None,
+    job_record: JobRecord,
+    dom_fields: list[dict],
+    page: Page,
+    claude_client: ClaudeClient,
+    notification_settings: NotificationSettings | None,
+    goals_profile_json: str | None,
+    supplementary_context: str | None,
+    log,
+) -> Result | None:
+    """Detect open-ended fields and route through escalation or auto-fill.
+
+    After form fields are identified, classifies them for open-ended questions.
+    If open-ended fields are found:
+    - fit_score >= human_review_threshold: generate drafts, create escalation
+    - fit_score < threshold: generate drafts, auto-fill fields, proceed
+
+    Args:
+        session: Active SQLAlchemy async session, or None.
+        job_record: The job record being applied to.
+        dom_fields: List of DOM field dicts extracted from the page.
+        page: Playwright Page instance.
+        claude_client: Claude API client for draft generation.
+        notification_settings: Notification channel configuration, or None.
+        goals_profile_json: User's goals profile as JSON string.
+        supplementary_context: Additional experience context.
+        log: Bound structlog logger.
+
+    Returns:
+        - Result(ok=False, reason="escalation_created") if escalation was created
+        - Result(ok=True) if auto-fill succeeded (caller should continue)
+        - None if no open-ended fields found or escalation infra unavailable
+
+    Validates: Requirements 2.1, 2.5
+    """
+    if session is None or notification_settings is None:
+        return None
+
+    from src.pipeline.open_ended_detector import classify_open_ended_fields
+
+    # Classify fields for open-ended questions
+    open_ended_fields = classify_open_ended_fields(dom_fields)
+
+    if not open_ended_fields:
+        return None
+
+    log.info(
+        "open_ended_fields_detected",
+        count=len(open_ended_fields),
+        field_ids=[f.field_id for f in open_ended_fields],
+    )
+
+    # Get the human_review_threshold from settings
+    from src.db.config_repo import get_config
+
+    settings_data = await get_config(session, "settings")
+    human_review_threshold = 85  # default
+    if settings_data and isinstance(settings_data, dict):
+        human_review_threshold = settings_data.get("human_review_threshold", 85)
+
+    fit_score = job_record.fit_score or 0
+
+    # Generate draft answers for the open-ended fields
+    from src.pipeline.draft_answer_generator import generate_draft_answers
+
+    draft_answers = await generate_draft_answers(
+        questions=open_ended_fields,
+        job_description=job_record.description or "",
+        goals_profile=goals_profile_json or "",
+        supplementary_context=supplementary_context,
+        claude_client=claude_client,
+    )
+
+    if fit_score >= human_review_threshold:
+        # High-score job: escalate for human review
+        log.info(
+            "escalating_for_human_review",
+            fit_score=fit_score,
+            threshold=human_review_threshold,
+            open_ended_count=len(open_ended_fields),
+        )
+
+        try:
+            from src.pipeline.escalation_engine import create_escalation
+
+            # Capture form state snapshot
+            form_state_snapshot = {
+                "external_url": job_record.external_url,
+                "fields": [
+                    {
+                        "field_id": f.get("id") or f.get("name") or "",
+                        "label": f.get("label", ""),
+                        "value": f.get("value", ""),
+                        "type": f.get("type", "text"),
+                        "selector": f.get("selector", ""),
+                        "is_open_ended": any(
+                            oe.field_id == (f.get("id") or f.get("name") or "")
+                            for oe in open_ended_fields
+                        ),
+                    }
+                    for f in dom_fields
+                ],
+                "screenshot_path": None,
+                "page_title": await page.title() if page else None,
+            }
+
+            # Convert draft answers to the expected format
+            draft_answers_dicts = None
+            if draft_answers:
+                draft_answers_dicts = [
+                    {
+                        "field_id": da["field_id"],
+                        "question_text": da["question_text"],
+                        "draft_answer": da["draft_answer"],
+                    }
+                    for da in draft_answers
+                ]
+
+            escalation_record = await create_escalation(
+                session=session,
+                job_record=job_record,
+                tier="human_review",
+                form_state_snapshot=form_state_snapshot,
+                draft_answers=draft_answers_dicts,
+                page=page,
+                notification_settings=notification_settings,
+            )
+
+            log.info(
+                "human_review_escalation_created",
+                escalation_id=escalation_record.id,
+                job_id=job_record.id,
+                fit_score=fit_score,
+                threshold=human_review_threshold,
+                draft_answers_count=len(draft_answers) if draft_answers else 0,
+            )
+
+            return Result(
+                ok=False,
+                error="Escalated for human review — open-ended questions on high-score job",
+                reason="escalation_created",
+            )
+
+        except Exception as exc:
+            log.error(
+                "human_review_escalation_failed",
+                error=str(exc),
+                exc_info=True,
+            )
+            # Fall through to auto-fill as fallback
+            log.info("falling_back_to_auto_fill_after_escalation_failure")
+
+    # Low-score job (or escalation failed): auto-fill with Claude drafts and proceed
+    if draft_answers:
+        log.info(
+            "auto_filling_open_ended_fields",
+            fit_score=fit_score,
+            threshold=human_review_threshold,
+            draft_count=len(draft_answers),
+        )
+
+        for da in draft_answers:
+            field_id = da["field_id"]
+            answer_text = da["draft_answer"]
+
+            # Find the matching open-ended field to get its selector
+            matching_field = next(
+                (oe for oe in open_ended_fields if oe.field_id == field_id),
+                None,
+            )
+            if matching_field and matching_field.selector:
+                sanitized = sanitize_value(answer_text)
+                if sanitized:
+                    try:
+                        await page.fill(matching_field.selector, sanitized, timeout=5000)
+                        log.debug(
+                            "open_ended_field_auto_filled",
+                            field_id=field_id,
+                            selector=matching_field.selector,
+                        )
+                    except Exception as exc:
+                        log.warning(
+                            "open_ended_field_auto_fill_failed",
+                            field_id=field_id,
+                            error=str(exc),
+                        )
+
+        # Return a success result to indicate auto-fill happened
+        # The caller should continue with the normal submission flow
+        return Result(ok=True)
+
+    # No draft answers generated (Claude failed) — proceed without filling open-ended
+    log.warning(
+        "open_ended_fields_skipped_no_drafts",
+        count=len(open_ended_fields),
+    )
+    return None
 
 
 # ---------------------------------------------------------------------------

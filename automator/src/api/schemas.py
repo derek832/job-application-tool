@@ -8,9 +8,13 @@ to "***" via a custom field_serializer to prevent credential leakage.
 
 from __future__ import annotations
 
+import json
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, field_serializer, field_validator
+import structlog
+from pydantic import BaseModel, ConfigDict, field_serializer, field_validator, model_validator
+
+logger = structlog.get_logger(__name__)
 
 # ---------------------------------------------------------------------------
 # Configuration schemas (used for both GET responses and PUT request bodies)
@@ -143,6 +147,10 @@ class Settings(BaseModel):
             applications via Vision Agent (default 80). Jobs scoring between
             good_fit_threshold and this value get tailored PDF but go to human
             queue for manual submission.
+        human_review_threshold: Minimum fit score for escalating external apply
+            jobs with open-ended questions for human review (default 85). Jobs
+            at or above this threshold pause for user review instead of
+            auto-submitting Claude's draft answers.
         backup_dir: Local directory path for daily DB backups.
         dry_run: When True, the pipeline runs all stages but skips actual form
             submission. Jobs reach "applying" status but are not submitted.
@@ -157,6 +165,7 @@ class Settings(BaseModel):
     good_fit_threshold: int = 75
     stretch_threshold: int = 50
     external_apply_threshold: int = 80
+    human_review_threshold: int = 85
     skip_viewed_jobs: bool = True
     backup_dir: str | None = None
     dry_run: bool = True
@@ -237,12 +246,24 @@ class JobRecordOut(BaseModel):
     queue_reason: str | None = None
     application_notes: str | None = None
     run_id: str | None = None
+    claude_cost_usd: float | None = None
     discovered_at: str
     extracted_at: str | None = None
     scored_at: str | None = None
     approved_at: str | None = None
     applied_at: str | None = None
     updated_at: str
+
+    @field_validator("claude_cost_usd", mode="before")
+    @classmethod
+    def coerce_cost(cls, v: str | float | None) -> float | None:
+        """Coerce TEXT-stored cost to float for API responses."""
+        if v is None:
+            return None
+        try:
+            return float(v)
+        except (ValueError, TypeError):
+            return None
 
 
 # ---------------------------------------------------------------------------
@@ -429,6 +450,8 @@ class SettingsUpdate(BaseModel):
         good_fit_threshold: Minimum score for automatic application.
         stretch_threshold: Minimum score for human review.
         external_apply_threshold: Minimum score for auto-submitting external applies.
+        human_review_threshold: Minimum fit score for escalating external apply
+            jobs with open-ended questions for human review (50-100).
         backup_dir: Local directory path for daily DB backups.
         dry_run: When True, skip actual form submission.
     """
@@ -442,6 +465,122 @@ class SettingsUpdate(BaseModel):
     good_fit_threshold: int | None = None
     stretch_threshold: int | None = None
     external_apply_threshold: int | None = None
+    human_review_threshold: int | None = None
     skip_viewed_jobs: bool | None = None
     backup_dir: str | None = None
     dry_run: bool | None = None
+
+    @field_validator("human_review_threshold")
+    @classmethod
+    def validate_human_review_threshold(cls, v: int | None) -> int | None:
+        """Ensure human_review_threshold is between 50 and 100 inclusive."""
+        if v is not None and (v < 50 or v > 100):
+            raise ValueError("human_review_threshold must be between 50 and 100")
+        return v
+
+    @model_validator(mode="after")
+    def warn_threshold_overlap(self) -> SettingsUpdate:
+        """Log a warning when human_review_threshold <= external_apply_threshold.
+
+        When the human review threshold is at or below the external apply
+        threshold, most external apply jobs will be escalated for review.
+        """
+        hrt = self.human_review_threshold
+        eat = self.external_apply_threshold
+        if hrt is not None and eat is not None and hrt <= eat:
+            logger.warning(
+                "human_review_threshold_at_or_below_external_apply_threshold",
+                human_review_threshold=hrt,
+                external_apply_threshold=eat,
+                msg="Most external apply jobs will be escalated for review",
+            )
+        return self
+
+
+# ---------------------------------------------------------------------------
+# Escalation schemas
+# ---------------------------------------------------------------------------
+
+
+class EscalationRecordOut(BaseModel):
+    """API representation of an escalation record.
+
+    The form_state_snapshot and draft_answers fields are stored as JSON strings
+    in the database but are parsed to dict/list in the API response via
+    field validators.
+
+    Attributes:
+        id: UUID4 primary key.
+        job_id: Foreign key to job_records.
+        tier: Escalation tier ("captcha" or "human_review").
+        form_state_snapshot: Parsed JSON of the form state at escalation time.
+        draft_answers: Parsed JSON array of Claude's draft answers (None for captcha tier).
+        timeout_deadline: ISO 8601 auto-submit deadline (None for captcha tier).
+        freshness_tier: Job freshness classification (None for captcha tier).
+        status: Current escalation status.
+        resolution_method: How the escalation was resolved (None while pending).
+        created_at: ISO 8601 timestamp of creation.
+        resolved_at: ISO 8601 timestamp of resolution (None while pending).
+        job_title: Denormalized from job_record for list display.
+        company: Denormalized from job_record for list display.
+        fit_score: Denormalized from job_record for list display.
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    job_id: str
+    tier: Literal["captcha", "human_review"]
+    form_state_snapshot: dict  # Parsed JSON
+    draft_answers: list[dict] | None = None  # Parsed JSON
+    timeout_deadline: str | None = None
+    freshness_tier: str | None = None
+    status: str
+    resolution_method: str | None = None
+    created_at: str
+    resolved_at: str | None = None
+    # Denormalized from job_record for list display
+    job_title: str | None = None
+    company: str | None = None
+    fit_score: int | None = None
+
+    @field_validator("form_state_snapshot", mode="before")
+    @classmethod
+    def parse_form_state_snapshot(cls, v: str | dict) -> dict:
+        """Parse JSON string from DB into a dict."""
+        if isinstance(v, str):
+            return json.loads(v)
+        return v
+
+    @field_validator("draft_answers", mode="before")
+    @classmethod
+    def parse_draft_answers(cls, v: str | list | None) -> list[dict] | None:
+        """Parse JSON string from DB into a list of dicts."""
+        if v is None:
+            return None
+        if isinstance(v, str):
+            return json.loads(v)
+        return v
+
+
+class EscalationSubmitRequest(BaseModel):
+    """Request body for POST /escalations/{id}/submit.
+
+    Attributes:
+        edited_answers: List of edited answer objects, each containing
+            field_id and edited_answer.
+    """
+
+    edited_answers: list[dict]  # [{field_id, edited_answer}]
+
+
+class EscalationListResponse(BaseModel):
+    """Response body for GET /escalations.
+
+    Attributes:
+        escalations: List of escalation records.
+        total: Total count of matching records.
+    """
+
+    escalations: list[EscalationRecordOut]
+    total: int

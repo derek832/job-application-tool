@@ -1,6 +1,8 @@
 export type Page =
   | "dashboard"
   | "queue"
+  | "escalations"
+  | "escalation-detail"
   | "history"
   | "search"
   | "goals"
@@ -17,6 +19,7 @@ interface NavigationProps {
 const NAV_ITEMS: { id: Page; label: string; icon: React.ReactNode }[] = [
   { id: "dashboard", label: "Dashboard", icon: <DashboardIcon /> },
   { id: "queue", label: "Queue", icon: <QueueIcon /> },
+  { id: "escalations", label: "Escalations", icon: <EscalationsIcon /> },
   { id: "preview", label: "Preview", icon: <PreviewIcon /> },
   { id: "history", label: "History", icon: <HistoryIcon /> },
   { id: "search", label: "Search", icon: <SearchIcon /> },
@@ -130,6 +133,15 @@ function PreviewIcon() {
     <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
       <path strokeLinecap="round" strokeLinejoin="round" d="M2.036 12.322a1.012 1.012 0 010-.639C3.423 7.51 7.36 4.5 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.638 0-8.573-3.007-9.963-7.178z" />
       <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+    </svg>
+  );
+}
+
+
+function EscalationsIcon() {
+  return (
+    <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+      <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z" />
     </svg>
   );
 }

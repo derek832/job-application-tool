@@ -7,6 +7,8 @@ import { useBadge } from "./hooks/useBadge";
 import type { ConnectionState } from "./types/connection";
 import { Dashboard } from "./pages/Dashboard";
 import { HumanQueue } from "./pages/HumanQueue";
+import { Escalations } from "./pages/Escalations";
+import { EscalationDetail } from "./pages/EscalationDetail";
 import { JobHistory } from "./pages/JobHistory";
 import { SearchConfig } from "./pages/SearchConfig";
 import { GoalsProfile } from "./pages/GoalsProfile";
@@ -20,6 +22,7 @@ const POLL_INTERVAL_MS = 60_000;
 function App() {
   const [activePage, setActivePage] = useState<Page>("dashboard");
   const [previewRunId, setPreviewRunId] = useState<string | null>(null);
+  const [selectedEscalationId, setSelectedEscalationId] = useState<string | null>(null);
   const [queueCount, setQueueCount] = useState(0);
   const [connection, setConnection] = useState<ConnectionState>({
     connected: true,
@@ -55,6 +58,11 @@ function App() {
     setActivePage("preview");
   }
 
+  function navigateToEscalationDetail(escalationId: string) {
+    setSelectedEscalationId(escalationId);
+    setActivePage("escalation-detail");
+  }
+
   // Load latest preview run ID on mount so the Preview nav item works
   useEffect(() => {
     async function loadLatestPreview() {
@@ -87,6 +95,15 @@ function App() {
         return <Dashboard onPreviewComplete={navigateToPreview} />;
       case "queue":
         return <HumanQueue />;
+      case "escalations":
+        return <Escalations onSelectEscalation={navigateToEscalationDetail} />;
+      case "escalation-detail":
+        return (
+          <EscalationDetail
+            escalationId={selectedEscalationId}
+            onBack={() => setActivePage("escalations")}
+          />
+        );
       case "history":
         return <JobHistory />;
       case "search":
