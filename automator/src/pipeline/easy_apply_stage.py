@@ -599,6 +599,11 @@ async def _handle_cover_letter(
         goals=goals,
     )
 
+    # Track cover letter generation cost on the job record
+    cover_letter_cost = claude_client.last_call_cost
+    existing_cost = float(job_record.claude_cost_usd or "0")
+    job_record.claude_cost_usd = str(round(existing_cost + cover_letter_cost, 6))
+
     # Store the cover letter in the job record
     job_record.cover_letter_text = cover_letter_text
 

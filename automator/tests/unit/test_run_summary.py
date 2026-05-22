@@ -122,7 +122,7 @@ class TestGenerateSummaryText:
             jobs_escalated=2,
         )
         result = generate_summary_text(stats)
-        assert "found 12 jobs" in result
+        assert "found 12 new jobs" in result
         assert "scored 10" in result
         assert "applied to 3" in result
         assert "skipped 5" in result
@@ -139,7 +139,7 @@ class TestGenerateSummaryText:
             jobs_escalated=0,
         )
         result = generate_summary_text(stats)
-        assert "found 0 jobs" in result
+        assert "found 0 new jobs" in result
         assert "No errors" in result
 
     def test_with_errors(self) -> None:

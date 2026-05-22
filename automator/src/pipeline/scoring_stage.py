@@ -63,11 +63,17 @@ async def run_scoring(
     )
 
     # 1. Call Claude API for fit scoring
+    cost_before = claude_client.total_cost_usd
     result: FitScoreResult = await claude_client.score_fit(
         description=job_record.description_text or "",
         resume=resume_content,
         goals=goals_profile,
     )
+    scoring_cost = claude_client.total_cost_usd - cost_before
+
+    # Accumulate cost on the job record
+    existing_cost = float(job_record.claude_cost_usd or "0")
+    job_record.claude_cost_usd = str(round(existing_cost + scoring_cost, 6))
 
     # 2. Store fit_score and fit_rationale in job_record
     job_record.fit_score = result.fit_score

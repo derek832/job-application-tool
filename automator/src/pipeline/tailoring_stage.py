@@ -120,11 +120,17 @@ async def run_tailoring(
 
     # Step 3: Invoke Claude for tailoring (returns JSON replacements)
     try:
+        cost_before = claude_client.total_cost_usd
         tailoring_response = await claude_client.tailor_resume(
             description=job_record.description_text,
             resume_base=resume_base,
             supplementary_context=supplementary_context,
         )
+        tailoring_cost = claude_client.total_cost_usd - cost_before
+
+        # Accumulate cost on the job record
+        existing_cost = float(job_record.claude_cost_usd or "0")
+        job_record.claude_cost_usd = str(round(existing_cost + tailoring_cost, 6))
     except TailoringError as exc:
         await _handle_tailoring_failure(exc.message, job_record, session, notification_settings)
         return
@@ -137,7 +143,8 @@ async def run_tailoring(
             raise ValueError("Expected a JSON array of replacements")
     except (json.JSONDecodeError, ValueError) as exc:
         await _handle_tailoring_failure(
-            f"Failed to parse tailoring replacements: {exc}", job_record, session, notification_settings
+            f"Failed to parse tailoring replacements: {exc}",
+            job_record, session, notification_settings,
         )
         return
 

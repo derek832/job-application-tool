@@ -1,6 +1,6 @@
 import { useState, useCallback, useRef, useEffect } from "react";
-import { getStatus, getActivityLog, getRunHistory, triggerRun, triggerPreview, getPreviewRun, pause, resume, getChromeStatus, getSessionHealth, ApiError } from "../api/client";
-import type { StatusResponse, LogEntry, RunHistoryItem, ChromeStatusResponse, SessionHealthResponse } from "../api/client";
+import { getStatus, getActivityLog, getRunHistory, triggerRun, triggerPreview, getPreviewRun, pause, resume, getChromeStatus, getSessionHealth, getCostStats, ApiError } from "../api/client";
+import type { StatusResponse, LogEntry, RunHistoryItem, ChromeStatusResponse, SessionHealthResponse, CostStats } from "../api/client";
 import { usePolling } from "../hooks/usePolling";
 
 const STATUS_COLORS: Record<string, string> = {
@@ -64,6 +64,7 @@ export function Dashboard({ onPreviewComplete }: DashboardProps): React.JSX.Elem
   const [runHistory, setRunHistory] = useState<RunHistoryItem[]>([]);
   const [chromeStatus, setChromeStatus] = useState<ChromeStatusResponse | null>(null);
   const [sessionHealth, setSessionHealth] = useState<SessionHealthResponse | null>(null);
+  const [costStats, setCostStats] = useState<CostStats | null>(null);
   const [healthCheckLoading, setHealthCheckLoading] = useState(false);
   const [chromeCopied, setChromeCopied] = useState(false);
   const [previewStatus, setPreviewStatus] = useState<"idle" | "running" | "completed" | "failed">("idle");
@@ -110,12 +111,22 @@ export function Dashboard({ onPreviewComplete }: DashboardProps): React.JSX.Elem
     }
   }, []);
 
+  const fetchCostStats = useCallback(async () => {
+    try {
+      const stats = await getCostStats();
+      setCostStats(stats);
+    } catch {
+      // Non-critical — cost stats may not be available yet
+    }
+  }, []);
+
   const pollCallback = useCallback(() => {
     fetchStatus();
     fetchLog();
     fetchRunHistory();
     fetchChromeStatus();
-  }, [fetchStatus, fetchLog, fetchRunHistory, fetchChromeStatus]);
+    fetchCostStats();
+  }, [fetchStatus, fetchLog, fetchRunHistory, fetchChromeStatus, fetchCostStats]);
 
   // Poll status and activity log every 60 seconds
   usePolling(pollCallback, 60_000);
@@ -349,6 +360,31 @@ export function Dashboard({ onPreviewComplete }: DashboardProps): React.JSX.Elem
         ))}
       </div>
 
+      {/* Claude API Cost */}
+      {costStats && (
+        <div className="bg-white rounded-xl border border-gray-200 p-4 shadow-sm">
+          <p className="text-xs text-gray-500 mb-3">Claude API Cost</p>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <p className="text-xs text-gray-400">Today</p>
+              <p className="text-lg font-semibold text-gray-900">${costStats.today_usd.toFixed(4)}</p>
+            </div>
+            <div>
+              <p className="text-xs text-gray-400">Last 7 Days</p>
+              <p className="text-lg font-semibold text-gray-900">${costStats.last_7_days_usd.toFixed(4)}</p>
+            </div>
+            <div>
+              <p className="text-xs text-gray-400">Last 30 Days</p>
+              <p className="text-lg font-semibold text-gray-900">${costStats.last_30_days_usd.toFixed(4)}</p>
+            </div>
+            <div>
+              <p className="text-xs text-gray-400">Avg per Run</p>
+              <p className="text-lg font-semibold text-gray-900">${costStats.per_run_avg_usd.toFixed(4)}</p>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Health indicators */}
       <div className="bg-white rounded-xl border border-gray-200 p-4 shadow-sm">
         <p className="text-xs text-gray-500 mb-3">Service Health</p>
@@ -448,9 +484,16 @@ export function Dashboard({ onPreviewComplete }: DashboardProps): React.JSX.Elem
           <div className="space-y-2 max-h-60 overflow-y-auto">
             {runHistory.map((entry) => (
               <div key={entry.id} className="py-2 border-t border-gray-100 first:border-0">
-                <p className="text-xs text-gray-400 mb-0.5">
-                  {formatRelativeTime(entry.created_at)}
-                </p>
+                <div className="flex items-center justify-between mb-0.5">
+                  <p className="text-xs text-gray-400">
+                    {formatRelativeTime(entry.created_at)}
+                  </p>
+                  {entry.claude_cost_usd != null && entry.claude_cost_usd > 0 && (
+                    <span className="text-xs text-gray-400">
+                      ${entry.claude_cost_usd.toFixed(4)}
+                    </span>
+                  )}
+                </div>
                 <p className="text-xs text-gray-700">{entry.summary}</p>
               </div>
             ))}

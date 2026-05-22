@@ -191,6 +191,11 @@ function JobRow({ job }: { job: JobRecordOut }): React.JSX.Element {
             {job.fit_score}
           </span>
         )}
+        {job.claude_cost_usd != null && job.claude_cost_usd > 0 && (
+          <span className="inline-flex items-center px-1.5 py-0.5 rounded text-xs text-gray-500 bg-gray-100">
+            ${job.claude_cost_usd.toFixed(4)}
+          </span>
+        )}
         <span className="text-xs text-gray-400 shrink-0">
           {formatDate(job.discovered_at)}
         </span>

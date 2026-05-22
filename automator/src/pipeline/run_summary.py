@@ -24,15 +24,20 @@ logger = structlog.get_logger(__name__)
 
 @dataclass
 class RunStats:
-    """Statistics collected from a completed pipeline run.
+    """Statistics collected from a completed pipeline run (delta-based).
+
+    All counts represent NEW activity since the previous run — not cumulative
+    totals from the entire database.
 
     Attributes:
-        jobs_discovered: Number of jobs found during the run.
-        jobs_scored: Number of jobs that were scored.
-        jobs_approved: Number of jobs approved for application.
-        jobs_applied: Number of jobs successfully applied to.
-        jobs_skipped: Number of jobs skipped.
-        jobs_escalated: Number of jobs escalated to the Human Queue.
+        jobs_discovered: Number of new jobs found during this run.
+        jobs_scored: Number of jobs scored during this run.
+        jobs_approved: Number of jobs auto-approved during this run.
+        jobs_applied: Number of jobs applied to during this run.
+        jobs_skipped: Number of jobs skipped during this run.
+        jobs_escalated: Number of jobs escalated to the Human Queue this run.
+        jobs_applied_from_queue: Number of jobs applied to after being approved
+            from the Human Queue since the previous run (inter-run activity).
         errors: List of error strings encountered during the run.
     """
 
@@ -42,25 +47,27 @@ class RunStats:
     jobs_applied: int
     jobs_skipped: int
     jobs_escalated: int
+    jobs_applied_from_queue: int = 0
+    claude_cost_usd: float = 0.0
     errors: list[str] = field(default_factory=list)
 
 
 def generate_summary_text(stats: RunStats) -> str:
     """Generate a plain-English summary paragraph from run statistics.
 
-    Produces a human-readable summary like:
-    "Run complete: found 12 jobs, scored 10, applied to 3, skipped 5,
-    2 need your review. No errors."
+    Produces a human-readable summary reporting only NEW activity this run:
+    "Run complete: found 8 new jobs, scored 6, applied to 3, skipped 2,
+    1 needs your review. Also applied to 2 jobs approved from queue. No errors."
 
     The output is guaranteed to be at most 500 characters.
 
     Args:
-        stats: The pipeline run statistics.
+        stats: The pipeline run statistics (delta-based).
 
     Returns:
         A plain-English summary string, max 500 characters.
     """
-    parts = [f"Run complete: found {stats.jobs_discovered} jobs"]
+    parts = [f"Run complete: found {stats.jobs_discovered} new jobs"]
 
     if stats.jobs_scored:
         parts.append(f"scored {stats.jobs_scored}")
@@ -72,6 +79,15 @@ def generate_summary_text(stats: RunStats) -> str:
         parts.append(f"{stats.jobs_escalated} need your review")
 
     summary = ", ".join(parts) + "."
+
+    # Add inter-run queue activity
+    if stats.jobs_applied_from_queue:
+        queue_suffix = (
+            f" Also applied to {stats.jobs_applied_from_queue} "
+            f"job{'s' if stats.jobs_applied_from_queue != 1 else ''} approved from queue."
+        )
+        if len(summary) + len(queue_suffix) <= 500:
+            summary += queue_suffix
 
     if stats.errors:
         error_suffix = f" Errors: {'; '.join(stats.errors[:3])}"
@@ -113,6 +129,8 @@ async def store_run_summary(
         jobs_applied=stats.jobs_applied,
         jobs_skipped=stats.jobs_skipped,
         jobs_escalated=stats.jobs_escalated,
+        jobs_applied_from_queue=stats.jobs_applied_from_queue,
+        claude_cost_usd=str(round(stats.claude_cost_usd, 6)) if stats.claude_cost_usd > 0 else None,
         errors=json.dumps(stats.errors) if stats.errors else None,
         created_at=datetime.now(UTC).isoformat(),
     )
