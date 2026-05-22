@@ -1,44 +1,33 @@
-# Git Workflow — Branch, Deploy, Verify, Merge
+# Git Workflow — Trunk-Based Development
 
 ## Purpose
 
-This steering file ensures all code changes follow a branch → deploy → verify → merge workflow. Main represents "known working code." Nothing merges to main until it has been observed working in a live pipeline run.
+All code lives on `main`. Commits go directly to main. Docker containers are the test environment. This keeps things simple for a solo developer project.
 
 ## The Workflow
 
-### 1. Create a Branch
+### 1. Make Changes
 
-Before writing any code:
+Write code, run tests locally if needed.
 
-```
-git checkout main
-git pull origin main
-git checkout -b <branch-type>/<short-description>
-```
-
-Branch naming:
-| Work Type | Pattern | Example |
-|---|---|---|
-| Bug fix | `fix/<description>` | `fix/rollback-integrity-error` |
-| Feature | `feat/<description>` | `feat/per-job-commits` |
-| Refactor | `refactor/<description>` | `refactor/pipeline-flow` |
-
-### 2. Implement and Commit
-
-- Make the change
-- Stage specific files (`git add <files>`, not `git add -A` unless all changes are related)
-- Commit with a conventional message: `fix:`, `feat:`, `refactor:`, `test:`, `chore:`
-- Keep subject under 72 characters
-
-### 3. Push the Branch
+### 2. Commit to Main
 
 ```
-git push -u origin <branch-name>
+git add <specific files>
+git commit -m "type: short description"
 ```
 
-This ensures the branch exists on GitHub regardless of what happens next.
+Commit types: `fix:`, `feat:`, `refactor:`, `test:`, `chore:`
 
-### 4. Deploy to Local Containers
+Keep subject under 72 characters. Stage specific files — avoid `git add -A` unless all changes are related.
+
+### 3. Push
+
+```
+git push origin main
+```
+
+### 4. Deploy
 
 Build and restart the affected service(s):
 
@@ -53,69 +42,32 @@ docker compose build frontend
 docker compose up -d frontend
 ```
 
-The running containers now have the branch code. This IS the test environment.
+### 5. Verify
 
-### 5. Verify with a Live Run
+For pipeline changes: check logs after the next run.
+For frontend changes: refresh the web app.
+For test-only changes: run `python -m pytest tests/ -q` — no deploy needed.
 
-**This is the critical step.** Do NOT merge until verification passes.
+## When to Use a Branch
 
-For pipeline-affecting changes (anything in `automator/src/`):
-- Wait for the next scheduled pipeline run, OR trigger a manual run
-- Observe the run via `docker compose logs automator --tail=100`
-- Confirm: no crashes, no `pipeline_fatal_error`, expected behavior in logs
-- Check the web app: jobs appearing, correct statuses, no 504s
+Only when you're genuinely experimenting and want a clean rollback point:
+- Risky refactors that touch many files
+- Trying an approach you might abandon entirely
 
-For frontend-only changes:
-- Refresh the web app and confirm the change works visually
-- No need to wait for a pipeline run
-
-For test-only or docs-only changes:
-- Run the test suite: `python -m pytest tests/ -q`
-- Merge immediately after tests pass (no live run needed)
-
-### 6. Merge to Main
-
-Only after verification passes:
-
-```
-git checkout main
-git pull origin main
-git merge <branch-name> --no-edit
-git push origin main
-```
-
-### 7. Stay on the Branch for Follow-ups
-
-If the verification reveals issues:
-- Stay on the branch
-- Fix the issue, commit, push
-- Rebuild containers
-- Re-verify
-- Only merge once it's clean
+In those cases: `git checkout -b experiment/description`, work on it, merge or delete.
 
 ## Rules
 
-- **Never commit directly to main.** Always use a branch.
-- **Never merge without verification.** The merge is the "this works" signal.
-- **Always push the branch before deploying.** GitHub should have the code even if verification fails.
-- **Always rebuild after commit.** Don't leave stale containers running old code.
-- **One branch per logical change.** Don't mix unrelated fixes on one branch.
-- **Keep merged branches.** They serve as history. Don't delete them.
+- **Commit directly to main** for normal work.
+- **Always push after committing.** GitHub should have the latest code.
+- **Always rebuild after deploy-worthy changes.** Don't leave stale containers.
+- **Stage specific files** over `git add -A` to avoid accidentally committing unrelated changes.
+- **Flag files that likely contain secrets** (.env, credentials.json, etc.) before committing.
 - **Don't force-push** unless explicitly asked.
+- **Use non-destructive git commands by default.** Destructive operations (reset --hard, clean -f) require explicit permission.
 
-## When Multiple Fixes Happen in One Session
+## Commit Hygiene
 
-If you're iterating on several bugs in one conversation:
-- Each fix gets its own branch
-- Deploy and verify each one before merging
-- If fixes are interdependent (fix B depends on fix A), stack them: merge A first, then branch B from updated main
-
-## Exception: Trivial Non-Code Changes
-
-These can go directly to main without a branch:
-- README/docs-only edits
-- Steering file updates
-- TODO.md updates
-- .gitignore changes
-
-Everything that touches `automator/src/`, `webapp/src/`, `docker-compose.yml`, or `Dockerfile` MUST go through the branch workflow.
+- One logical change per commit when practical
+- If a session produces multiple unrelated changes, separate commits are fine
+- Commit messages should be descriptive enough to understand the change without reading the diff
