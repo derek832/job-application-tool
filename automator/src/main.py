@@ -23,6 +23,7 @@ from fastapi import FastAPI
 from src.api.chrome_routes import router as chrome_router
 from src.api.config_routes import router as config_router
 from src.api.config_routes import schedule_router
+from src.api.escalation_routes import router as escalation_router
 from src.api.health_routes import router as health_router
 from src.api.job_routes import router as job_router
 from src.api.lan_server import create_lan_app, start_lan_server
@@ -239,6 +240,13 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     else:
         logger.info("schedule_config_not_found", reason="no schedule_config in database")
 
+    # Recover pending escalation timeouts that may have expired during downtime
+    from src.pipeline.escalation_scheduler import recover_pending_timeouts_on_startup
+
+    async for session in get_session():
+        await recover_pending_timeouts_on_startup(session)
+        break
+
     logger.info("startup_complete", host="0.0.0.0", port=7432)
 
     yield
@@ -274,6 +282,7 @@ app.include_router(run_router)
 app.include_router(preview_router)
 app.include_router(health_router)
 app.include_router(chrome_router)
+app.include_router(escalation_router)
 
 
 # ---------------------------------------------------------------------------

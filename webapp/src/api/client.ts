@@ -88,6 +88,7 @@ export const JobRecordOutSchema = z.object({
   queue_reason: z.string().nullable(),
   application_notes: z.string().nullable(),
   run_id: z.string().nullable(),
+  claude_cost_usd: z.number().nullable(),
   discovered_at: z.string(),
   extracted_at: z.string().nullable(),
   scored_at: z.string().nullable(),
@@ -627,6 +628,7 @@ export const RunHistoryItemSchema = z.object({
   id: z.string(),
   created_at: z.string(),
   summary: z.string(),
+  claude_cost_usd: z.number().nullable().optional(),
 });
 
 export const RunHistoryResponseSchema = z.object({
@@ -642,6 +644,24 @@ export async function getRunHistory(limit: number = 5): Promise<RunHistoryItem[]
     RunHistoryResponseSchema
   );
   return result.items;
+}
+
+// ---------------------------------------------------------------------------
+// Cost Stats
+// ---------------------------------------------------------------------------
+
+export const CostStatsSchema = z.object({
+  today_usd: z.number(),
+  last_7_days_usd: z.number(),
+  last_30_days_usd: z.number(),
+  all_time_usd: z.number(),
+  per_run_avg_usd: z.number(),
+});
+
+export type CostStats = z.infer<typeof CostStatsSchema>;
+
+export async function getCostStats(): Promise<CostStats> {
+  return request("/runs/cost-stats", CostStatsSchema);
 }
 
 
@@ -690,6 +710,62 @@ export async function addBlacklistTitle(value: string): Promise<void> {
 export async function removeBlacklistTitle(entry: string): Promise<void> {
   return requestVoid(`/config/blacklist/titles/${encodeURIComponent(entry)}`, {
     method: "DELETE",
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Escalations
+// ---------------------------------------------------------------------------
+
+export const EscalationRecordOutSchema = z.object({
+  id: z.string(),
+  job_id: z.string(),
+  tier: z.enum(["captcha", "human_review"]),
+  form_state_snapshot: z.record(z.string(), z.unknown()),
+  draft_answers: z.array(z.object({
+    field_id: z.string(),
+    question_text: z.string(),
+    draft_answer: z.string(),
+    edited_answer: z.string().nullable(),
+  }).passthrough()).nullable(),
+  timeout_deadline: z.string().nullable(),
+  freshness_tier: z.string().nullable(),
+  status: z.string(),
+  resolution_method: z.string().nullable(),
+  created_at: z.string(),
+  resolved_at: z.string().nullable(),
+  job_title: z.string().nullable(),
+  company: z.string().nullable(),
+  fit_score: z.number().int().nullable(),
+});
+
+export const EscalationListResponseSchema = z.object({
+  escalations: z.array(EscalationRecordOutSchema),
+  total: z.number().int(),
+});
+
+export type EscalationRecordOut = z.infer<typeof EscalationRecordOutSchema>;
+export type EscalationListResponse = z.infer<typeof EscalationListResponseSchema>;
+
+export async function getEscalations(includeResolved = false): Promise<EscalationListResponse> {
+  const query = includeResolved ? "?include_resolved=true" : "";
+  return request(`/escalations${query}`, EscalationListResponseSchema);
+}
+
+export async function getEscalation(id: string): Promise<EscalationRecordOut> {
+  return request(`/escalations/${encodeURIComponent(id)}`, EscalationRecordOutSchema);
+}
+
+export async function submitEscalation(id: string, editedAnswers: Record<string, unknown>[]): Promise<EscalationRecordOut> {
+  return request(`/escalations/${encodeURIComponent(id)}/submit`, EscalationRecordOutSchema, {
+    method: "POST",
+    body: JSON.stringify({ edited_answers: editedAnswers }),
+  });
+}
+
+export async function skipEscalation(id: string): Promise<EscalationRecordOut> {
+  return request(`/escalations/${encodeURIComponent(id)}/skip`, EscalationRecordOutSchema, {
+    method: "POST",
   });
 }
 

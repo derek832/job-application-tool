@@ -206,6 +206,9 @@ async def _run_migrations(engine: AsyncEngine) -> None:
     migrations: list[tuple[str, str, str]] = [
         # (table, column, SQL type)
         ("job_records", "run_id", "TEXT"),
+        ("run_summaries", "jobs_applied_from_queue", "INTEGER DEFAULT 0"),
+        ("job_records", "claude_cost_usd", "TEXT"),
+        ("run_summaries", "claude_cost_usd", "TEXT"),
     ]
 
     async with engine.begin() as conn:
@@ -221,3 +224,14 @@ async def _run_migrations(engine: AsyncEngine) -> None:
                     column=column,
                     col_type=col_type,
                 )
+
+        # Create partial index on escalation_records.timeout_deadline for
+        # efficient lookup of pending escalations with active timeouts.
+        # This is idempotent — CREATE INDEX IF NOT EXISTS is a no-op if it exists.
+        await conn.execute(
+            sa_text(
+                "CREATE INDEX IF NOT EXISTS idx_escalation_records_timeout_pending "
+                "ON escalation_records(timeout_deadline) "
+                "WHERE status = 'pending' AND timeout_deadline IS NOT NULL"
+            )
+        )

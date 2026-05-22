@@ -271,7 +271,20 @@ async def put_settings(
     update_data = body.model_dump(exclude_none=True)
     merged = {**existing, **update_data}
     await set_config(session, "settings", merged)
-    return Settings(**merged)
+
+    result = Settings(**merged)
+
+    # Warn when human_review_threshold <= external_apply_threshold in the
+    # merged settings — most external apply jobs will be escalated for review.
+    if result.human_review_threshold <= result.external_apply_threshold:
+        logger.warning(
+            "human_review_threshold_at_or_below_external_apply_threshold",
+            human_review_threshold=result.human_review_threshold,
+            external_apply_threshold=result.external_apply_threshold,
+            msg="Most external apply jobs will be escalated for review",
+        )
+
+    return result
 
 
 # ---------------------------------------------------------------------------

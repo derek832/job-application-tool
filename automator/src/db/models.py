@@ -109,6 +109,7 @@ class JobRecord(Base):
     queue_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     application_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     run_id: Mapped[str | None] = mapped_column(Text, nullable=True, default=None)
+    claude_cost_usd: Mapped[str | None] = mapped_column(Text, nullable=True, default=None)
     discovered_at: Mapped[str] = mapped_column(Text, nullable=False)
     extracted_at: Mapped[str | None] = mapped_column(Text, nullable=True)
     scored_at: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -255,6 +256,8 @@ class RunSummary(Base):
         jobs_applied: Number of jobs successfully applied to.
         jobs_skipped: Number of jobs skipped.
         jobs_escalated: Number of jobs escalated to the Human Queue.
+        jobs_applied_from_queue: Number of jobs applied after queue approval
+            since the previous run.
         errors: JSON array of error strings (nullable).
         created_at: ISO 8601 timestamp when the summary was created.
     """
@@ -269,6 +272,8 @@ class RunSummary(Base):
     jobs_applied: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     jobs_skipped: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     jobs_escalated: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    jobs_applied_from_queue: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    claude_cost_usd: Mapped[str | None] = mapped_column(Text, nullable=True, default=None)
     errors: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[str] = mapped_column(Text, nullable=False)
 
@@ -548,6 +553,75 @@ class BlacklistEntry(Base):
         return (
             f"<BlacklistEntry id={self.id} type={self.entry_type!r} "
             f"value={self.value!r} hits={self.hit_count}>"
+        )
+
+
+# ---------------------------------------------------------------------------
+# NotificationQueue (Wave 3 — Pipeline Intelligence)
+# ---------------------------------------------------------------------------
+
+
+# ---------------------------------------------------------------------------
+# EscalationRecord (Human-in-the-Loop Escalation)
+# ---------------------------------------------------------------------------
+
+
+class EscalationRecord(Base):
+    """Tracks a paused application requiring human intervention.
+
+    Maps to the ``escalation_records`` table.  Created when the Vision Agent
+    encounters a CAPTCHA or detects open-ended questions on a high-scoring job.
+    The record persists the full lifecycle from creation through resolution
+    (user submit, auto-submit on timeout, skip, or expiry).
+
+    Attributes:
+        id: UUID4 string primary key.
+        job_id: Foreign key referencing ``job_records.id``.
+        tier: Escalation type — ``'captcha'`` or ``'human_review'``.
+        form_state_snapshot: JSON blob capturing the partially-filled form state.
+        draft_answers: JSON array of Claude's generated answers; NULL for CAPTCHA tier.
+        timeout_deadline: ISO 8601 deadline for auto-submit; NULL for CAPTCHA tier.
+        freshness_tier: Job posting freshness — ``'fresh'``, ``'recent'``, or ``'stale'``;
+            NULL for CAPTCHA tier.
+        status: Current lifecycle status — ``'pending'``, ``'resolved'``,
+            ``'auto_submitted'``, ``'skipped'``, or ``'expired'``.
+        resolution_method: How the escalation was resolved — ``'user_submit'``,
+            ``'user_skip'``, ``'auto_submit'``, ``'captcha_solved'``,
+            ``'timeout_expired'``, or ``'form_expired'``; NULL while pending.
+        created_at: ISO 8601 timestamp when the escalation was created.
+        resolved_at: ISO 8601 timestamp when the escalation was resolved; NULL while pending.
+        job: Relationship to the parent ``JobRecord``.
+    """
+
+    __tablename__ = "escalation_records"
+
+    id: Mapped[str] = mapped_column(Text, primary_key=True)
+    job_id: Mapped[str] = mapped_column(
+        Text, ForeignKey("job_records.id", ondelete="CASCADE"), nullable=False
+    )
+    tier: Mapped[str] = mapped_column(Text, nullable=False)
+    form_state_snapshot: Mapped[str] = mapped_column(Text, nullable=False)
+    draft_answers: Mapped[str | None] = mapped_column(Text, nullable=True)
+    timeout_deadline: Mapped[str | None] = mapped_column(Text, nullable=True)
+    freshness_tier: Mapped[str | None] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(Text, nullable=False, default="pending")
+    resolution_method: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[str] = mapped_column(Text, nullable=False)
+    resolved_at: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    # Relationship
+    job: Mapped[JobRecord] = relationship("JobRecord")
+
+    __table_args__ = (
+        Index("idx_escalation_records_status", "status"),
+        Index("idx_escalation_records_job_id", "job_id"),
+        Index("idx_escalation_records_timeout", "timeout_deadline"),
+    )
+
+    def __repr__(self) -> str:
+        return (
+            f"<EscalationRecord id={self.id!r} job_id={self.job_id!r} "
+            f"tier={self.tier!r} status={self.status!r}>"
         )
 
 

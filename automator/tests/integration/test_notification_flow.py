@@ -529,7 +529,7 @@ class TestRunSummaryFlow:
         assert stored.jobs_applied == 3
         assert stored.jobs_skipped == 4
         assert stored.jobs_escalated == 2
-        assert "found 12 jobs" in stored.summary
+        assert "found 12 new jobs" in stored.summary
         assert len(stored.summary) <= 500
 
         # Verify ntfy was called with the info topic
@@ -541,7 +541,7 @@ class TestRunSummaryFlow:
         assert request_body["priority"] == 3
         assert "chart_with_upwards_trend" in request_body["tags"]
         assert request_body["title"] == "Job Automator"
-        assert "found 12 jobs" in request_body["message"]
+        assert "found 12 new jobs" in request_body["message"]
 
         # Verify the notification log for the summary publish
         result = await session.execute(

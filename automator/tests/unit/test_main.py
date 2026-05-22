@@ -69,13 +69,14 @@ class TestLifespan:
         with (
             patch("src.main.build_engine", return_value=mock_engine) as mock_build,
             patch("src.main.init_db", new_callable=AsyncMock) as mock_init,
-            patch("src.main.get_session", side_effect=[fake_get_session(), fake_get_session(), fake_get_session(), fake_get_session(), fake_get_session(), fake_get_session()]),
+            patch("src.main.get_session", side_effect=[fake_get_session(), fake_get_session(), fake_get_session(), fake_get_session(), fake_get_session(), fake_get_session(), fake_get_session()]),
             patch("src.main.get_config", side_effect=fake_get_config),
             patch("src.main.set_config", new_callable=AsyncMock),
             patch("src.main.setup_scheduler") as mock_sched,
             patch("src.main.ensure_topics", new_callable=AsyncMock),
             patch("src.main.create_lan_app"),
             patch("src.main.start_lan_server", new_callable=AsyncMock),
+            patch("src.pipeline.escalation_scheduler.recover_pending_timeouts_on_startup", new_callable=AsyncMock),
         ):
             mock_sched.return_value = MagicMock(running=True, shutdown=MagicMock())
 
@@ -112,13 +113,14 @@ class TestLifespan:
         with (
             patch("src.main.build_engine", return_value=mock_engine),
             patch("src.main.init_db", new_callable=AsyncMock),
-            patch("src.main.get_session", side_effect=[fake_get_session(), fake_get_session(), fake_get_session(), fake_get_session(), fake_get_session(), fake_get_session()]),
+            patch("src.main.get_session", side_effect=[fake_get_session(), fake_get_session(), fake_get_session(), fake_get_session(), fake_get_session(), fake_get_session(), fake_get_session()]),
             patch("src.main.get_config", side_effect=fake_get_config),
             patch("src.main.set_config", side_effect=fake_set_config),
             patch("src.main.setup_scheduler") as mock_sched,
             patch("src.main.ensure_topics", new_callable=AsyncMock),
             patch("src.main.create_lan_app"),
             patch("src.main.start_lan_server", new_callable=AsyncMock),
+            patch("src.pipeline.escalation_scheduler.recover_pending_timeouts_on_startup", new_callable=AsyncMock),
         ):
             mock_sched.return_value = MagicMock(running=True, shutdown=MagicMock())
 
@@ -156,13 +158,14 @@ class TestLifespan:
         with (
             patch("src.main.build_engine", return_value=mock_engine),
             patch("src.main.init_db", new_callable=AsyncMock),
-            patch("src.main.get_session", side_effect=[fake_get_session(), fake_get_session(), fake_get_session(), fake_get_session(), fake_get_session(), fake_get_session()]),
+            patch("src.main.get_session", side_effect=[fake_get_session(), fake_get_session(), fake_get_session(), fake_get_session(), fake_get_session(), fake_get_session(), fake_get_session()]),
             patch("src.main.get_config", side_effect=fake_get_config),
             patch("src.main.set_config", side_effect=fake_set_config),
             patch("src.main.setup_scheduler") as mock_sched,
             patch("src.main.ensure_topics", new_callable=AsyncMock),
             patch("src.main.create_lan_app"),
             patch("src.main.start_lan_server", new_callable=AsyncMock),
+            patch("src.pipeline.escalation_scheduler.recover_pending_timeouts_on_startup", new_callable=AsyncMock),
         ):
             mock_sched.return_value = MagicMock(running=True, shutdown=MagicMock())
 
@@ -195,13 +198,14 @@ class TestLifespan:
         with (
             patch("src.main.build_engine", return_value=mock_engine),
             patch("src.main.init_db", new_callable=AsyncMock),
-            patch("src.main.get_session", side_effect=[fake_get_session(), fake_get_session(), fake_get_session(), fake_get_session(), fake_get_session(), fake_get_session()]),
+            patch("src.main.get_session", side_effect=[fake_get_session(), fake_get_session(), fake_get_session(), fake_get_session(), fake_get_session(), fake_get_session(), fake_get_session()]),
             patch("src.main.get_config", side_effect=fake_get_config),
             patch("src.main.set_config", new_callable=AsyncMock),
             patch("src.main.setup_scheduler") as mock_sched,
             patch("src.main.ensure_topics", new_callable=AsyncMock),
             patch("src.main.create_lan_app"),
             patch("src.main.start_lan_server", new_callable=AsyncMock),
+            patch("src.pipeline.escalation_scheduler.recover_pending_timeouts_on_startup", new_callable=AsyncMock),
         ):
             mock_sched.return_value = MagicMock(running=True, shutdown=MagicMock())
 
@@ -232,13 +236,14 @@ class TestLifespan:
         with (
             patch("src.main.build_engine", return_value=mock_engine),
             patch("src.main.init_db", new_callable=AsyncMock),
-            patch("src.main.get_session", side_effect=[fake_get_session(), fake_get_session(), fake_get_session(), fake_get_session(), fake_get_session(), fake_get_session()]),
+            patch("src.main.get_session", side_effect=[fake_get_session(), fake_get_session(), fake_get_session(), fake_get_session(), fake_get_session(), fake_get_session(), fake_get_session()]),
             patch("src.main.get_config", side_effect=fake_get_config),
             patch("src.main.set_config", new_callable=AsyncMock),
             patch("src.main.setup_scheduler") as mock_sched,
             patch("src.main.ensure_topics", new_callable=AsyncMock),
             patch("src.main.create_lan_app"),
             patch("src.main.start_lan_server", new_callable=AsyncMock),
+            patch("src.pipeline.escalation_scheduler.recover_pending_timeouts_on_startup", new_callable=AsyncMock),
         ):
             mock_sched.return_value = MagicMock(running=True, shutdown=MagicMock())
 
@@ -272,13 +277,14 @@ class TestLifespan:
         with (
             patch("src.main.build_engine", return_value=mock_engine),
             patch("src.main.init_db", new_callable=AsyncMock),
-            patch("src.main.get_session", side_effect=[fake_get_session(), fake_get_session(), fake_get_session(), fake_get_session(), fake_get_session(), fake_get_session()]),
+            patch("src.main.get_session", side_effect=[fake_get_session(), fake_get_session(), fake_get_session(), fake_get_session(), fake_get_session(), fake_get_session(), fake_get_session()]),
             patch("src.main.get_config", side_effect=fake_get_config),
             patch("src.main.set_config", new_callable=AsyncMock),
             patch("src.main.setup_scheduler") as mock_sched,
             patch("src.main.ensure_topics", new_callable=AsyncMock),
             patch("src.main.create_lan_app"),
             patch("src.main.start_lan_server", new_callable=AsyncMock),
+            patch("src.pipeline.escalation_scheduler.recover_pending_timeouts_on_startup", new_callable=AsyncMock),
         ):
             # setup_scheduler stores on app.state.scheduler
             def side_effect_setup(a, t):
@@ -331,7 +337,7 @@ class TestLifespan:
         with (
             patch("src.main.build_engine", return_value=mock_engine),
             patch("src.main.init_db", new_callable=AsyncMock),
-            patch("src.main.get_session", side_effect=[fake_get_session(), fake_get_session(), fake_get_session(), fake_get_session(), fake_get_session(), fake_get_session()]),
+            patch("src.main.get_session", side_effect=[fake_get_session(), fake_get_session(), fake_get_session(), fake_get_session(), fake_get_session(), fake_get_session(), fake_get_session()]),
             patch("src.main.get_config", side_effect=fake_get_config),
             patch("src.main.set_config", new_callable=AsyncMock),
             patch("src.main.setup_scheduler") as mock_sched,
@@ -340,6 +346,7 @@ class TestLifespan:
             patch("src.main.ensure_topics", new_callable=AsyncMock),
             patch("src.main.create_lan_app"),
             patch("src.main.start_lan_server", new_callable=AsyncMock),
+            patch("src.pipeline.escalation_scheduler.recover_pending_timeouts_on_startup", new_callable=AsyncMock),
         ):
             def side_effect_setup(a, t):
                 a.state.scheduler = mock_scheduler_instance
@@ -387,7 +394,7 @@ class TestLifespan:
         with (
             patch("src.main.build_engine", return_value=mock_engine),
             patch("src.main.init_db", new_callable=AsyncMock),
-            patch("src.main.get_session", side_effect=[fake_get_session(), fake_get_session(), fake_get_session(), fake_get_session(), fake_get_session(), fake_get_session()]),
+            patch("src.main.get_session", side_effect=[fake_get_session(), fake_get_session(), fake_get_session(), fake_get_session(), fake_get_session(), fake_get_session(), fake_get_session()]),
             patch("src.main.get_config", side_effect=fake_get_config),
             patch("src.main.set_config", new_callable=AsyncMock),
             patch("src.main.setup_scheduler") as mock_sched,
@@ -396,6 +403,7 @@ class TestLifespan:
             patch("src.main.ensure_topics", new_callable=AsyncMock),
             patch("src.main.create_lan_app"),
             patch("src.main.start_lan_server", new_callable=AsyncMock),
+            patch("src.pipeline.escalation_scheduler.recover_pending_timeouts_on_startup", new_callable=AsyncMock),
         ):
             def side_effect_setup(a, t):
                 a.state.scheduler = mock_scheduler_instance
@@ -446,7 +454,7 @@ class TestLifespan:
         with (
             patch("src.main.build_engine", return_value=mock_engine),
             patch("src.main.init_db", new_callable=AsyncMock),
-            patch("src.main.get_session", side_effect=[fake_get_session(), fake_get_session(), fake_get_session(), fake_get_session(), fake_get_session(), fake_get_session()]),
+            patch("src.main.get_session", side_effect=[fake_get_session(), fake_get_session(), fake_get_session(), fake_get_session(), fake_get_session(), fake_get_session(), fake_get_session()]),
             patch("src.main.get_config", side_effect=fake_get_config),
             patch("src.main.set_config", new_callable=AsyncMock),
             patch("src.main.setup_scheduler") as mock_sched,
@@ -455,6 +463,7 @@ class TestLifespan:
             patch("src.main.ensure_topics", new_callable=AsyncMock),
             patch("src.main.create_lan_app"),
             patch("src.main.start_lan_server", new_callable=AsyncMock),
+            patch("src.pipeline.escalation_scheduler.recover_pending_timeouts_on_startup", new_callable=AsyncMock),
         ):
             def side_effect_setup(a, t):
                 a.state.scheduler = mock_scheduler_instance
