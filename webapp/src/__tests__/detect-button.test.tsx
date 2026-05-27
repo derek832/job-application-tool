@@ -39,6 +39,7 @@ const defaultSettings = {
   good_fit_threshold: 70,
   stretch_threshold: 50,
   external_apply_threshold: 80,
+  human_review_threshold: 85,
   skip_viewed_jobs: true,
   backup_dir: null,
   dry_run: false,

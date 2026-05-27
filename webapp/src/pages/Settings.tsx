@@ -33,6 +33,7 @@ export function Settings(): React.JSX.Element {
     good_fit_threshold: 70,
     stretch_threshold: 50,
     external_apply_threshold: 80,
+    human_review_threshold: 85,
     skip_viewed_jobs: true,
     backup_dir: null,
     dry_run: false,
@@ -935,6 +936,21 @@ export function Settings(): React.JSX.Element {
               />
               <p className="text-xs text-gray-400 mt-1">
                 Jobs at or above this score auto-submit via Vision Agent. Below this, resume is tailored but you apply manually.
+              </p>
+            </FormField>
+            <FormField label="Human Review Threshold">
+              <input
+                type="number"
+                min={50}
+                max={100}
+                value={form.human_review_threshold ?? 85}
+                onChange={(e) =>
+                  setForm((f: SettingsType) => ({ ...f, human_review_threshold: parseInt(e.target.value, 10) || 85 }))
+                }
+                className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+              />
+              <p className="text-xs text-gray-400 mt-1">
+                Jobs at or above this score with open-ended questions pause for your review. Below this, Claude auto-fills and submits.
               </p>
             </FormField>
           </div>
