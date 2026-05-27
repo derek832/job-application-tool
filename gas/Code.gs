@@ -163,6 +163,12 @@ function handleTailorAndExport(replacements) {
       }
     }
 
+    // Nuclear underline cleanup: the source document has NO underlined text.
+    // Paragraph bottom borders can cause spurious underline inheritance during
+    // insertText that setUnderline(false) in safeReplace may not fully clear.
+    // Walk every text element and force-clear underline on the entire content.
+    var cleared = clearAllUnderlines(body);
+
     doc.saveAndClose();
 
     // Export the copy as PDF
@@ -173,7 +179,7 @@ function handleTailorAndExport(replacements) {
     // Delete the temp copy
     DriveApp.getFileById(copyId).setTrashed(true);
 
-    return jsonResponse({ pdf: base64, success: true, replacements_applied: applied });
+    return jsonResponse({ pdf: base64, success: true, replacements_applied: applied, underlines_cleared: cleared });
   } catch (err) {
     // Clean up on error
     try {
@@ -186,10 +192,63 @@ function handleTailorAndExport(replacements) {
 }
 
 /**
+ * Walks every text element in the document body and forces underline to false.
+ * Also clears any paragraph-level underline attributes. This is safe because
+ * the source resume contains no underlined text — any underline present after
+ * replacements is a spurious artifact from GAS insertText inheriting from
+ * paragraph borders or adjacent elements.
+ *
+ * @param {Body} body - The document body.
+ */
+function clearAllUnderlines(body) {
+  var numChildren = body.getNumChildren();
+  var count = 0;
+  for (var i = 0; i < numChildren; i++) {
+    var child = body.getChild(i);
+    count += clearUnderlineInElement(child);
+  }
+  return count;
+}
+
+/**
+ * Recursively clears underline on text within an element.
+ * Handles paragraphs, list items, and their child text elements.
+ * Also clears paragraph-level attributes that might cause underline inheritance.
+ *
+ * @param {Element} element - A document element (paragraph, list item, etc.)
+ */
+function clearUnderlineInElement(element) {
+  var type = element.getType();
+  var count = 0;
+
+  if (type === DocumentApp.ElementType.TEXT) {
+    var text = element.asText();
+    var content = text.getText();
+    if (content.length > 0) {
+      text.setUnderline(false);
+      count++;
+    }
+  } else if (type === DocumentApp.ElementType.PARAGRAPH ||
+             type === DocumentApp.ElementType.LIST_ITEM) {
+    // Clear paragraph-level underline attribute
+    var attrs = {};
+    attrs[DocumentApp.Attribute.UNDERLINE] = false;
+    element.setAttributes(attrs);
+    count++;
+
+    var numChildren = element.getNumChildren();
+    for (var i = 0; i < numChildren; i++) {
+      count += clearUnderlineInElement(element.getChild(i));
+    }
+  }
+  return count;
+}
+
+/**
  * Safely replaces text within a document body without disrupting formatting.
- * Captures the formatting state of the original text BEFORE any modifications,
- * then explicitly applies that formatting to the replacement text after insertion.
- * This prevents formatting bleed from adjacent underlined/bold elements.
+ * Preserves bold and italic from the original text, but ALWAYS forces underline
+ * to false — the source resume uses no underlines, and paragraph bottom borders
+ * can cause GAS insertText to inherit spurious underline attributes.
  *
  * @param {Body} body - The document body.
  * @param {string} findText - Exact text to find.
@@ -210,22 +269,42 @@ function safeReplace(body, findText, replaceWith) {
   // Get the Text object
   var textObj = element.asText();
 
-  // Capture formatting state BEFORE any modifications
-  // Use the middle of the matched text to avoid boundary effects
-  var sampleOffset = Math.min(startOffset + 1, endOffset);
-  var wasBold = textObj.isBold(sampleOffset);
-  var wasUnderline = textObj.isUnderline(sampleOffset);
-  var wasItalic = textObj.isItalic(sampleOffset);
+  // Sample formatting at start and end to detect boundaries.
+  // GAS returns null for "inherited" formatting — treat null as false.
+  var startBold = textObj.isBold(startOffset) || false;
+  var startItalic = textObj.isItalic(startOffset) || false;
+  var endBold = textObj.isBold(endOffset) || false;
+  var endItalic = textObj.isItalic(endOffset) || false;
+
+  // If formatting is uniform, use it. If it spans a boundary, use the END
+  // (body text) to avoid bleeding heading styles into plain text.
+  var applyBold = (startBold === endBold) ? startBold : endBold;
+  var applyItalic = (startItalic === endItalic) ? startItalic : endItalic;
 
   // Perform the replacement
   textObj.deleteText(startOffset, endOffset);
   textObj.insertText(startOffset, replaceWith);
 
-  // Explicitly set formatting on the entire replacement to match the original
+  // Force-clear ALL formatting first, then re-apply only bold/italic.
+  // This two-step approach prevents underline from being re-inherited
+  // when bold+italic are set on text adjacent to paragraph borders.
   var replaceEnd = startOffset + replaceWith.length - 1;
-  textObj.setBold(startOffset, replaceEnd, wasBold);
-  textObj.setUnderline(startOffset, replaceEnd, wasUnderline);
-  textObj.setItalic(startOffset, replaceEnd, wasItalic);
+
+  // Step 1: Clear everything
+  var clearAttrs = {};
+  clearAttrs[DocumentApp.Attribute.BOLD] = false;
+  clearAttrs[DocumentApp.Attribute.ITALIC] = false;
+  clearAttrs[DocumentApp.Attribute.UNDERLINE] = false;
+  clearAttrs[DocumentApp.Attribute.STRIKETHROUGH] = false;
+  textObj.setAttributes(startOffset, replaceEnd, clearAttrs);
+
+  // Step 2: Re-apply only bold and italic as needed
+  if (applyBold) {
+    textObj.setBold(startOffset, replaceEnd, true);
+  }
+  if (applyItalic) {
+    textObj.setItalic(startOffset, replaceEnd, true);
+  }
 
   return true;
 }

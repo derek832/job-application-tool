@@ -216,13 +216,35 @@ Additionally, the Gmail OAuth2 token file (`data/gmail_token.json`) must be gene
 
 ## Google Apps Script Deployment
 
-The `gas/Code.gs` script must be deployed as a Web App in Google Apps Script:
+The `gas/` directory contains the Google Apps Script source and is configured for deployment via `clasp` (the GAS CLI).
 
-1. Open [script.google.com](https://script.google.com), create a new project.
+### CLI Deployment (Preferred)
+
+```bash
+cd gas
+clasp push                    # Push Code.gs to the Apps Script project
+clasp deploy -d "description" # Create a new versioned deployment
+```
+
+If `clasp push` fails with an auth error, re-authenticate:
+```bash
+clasp login                   # Opens browser for Google OAuth
+clasp push                    # Retry after login
+```
+
+The script ID is configured in `gas/.clasp.json`. The `rootDir` is `.` (the `gas/` folder itself), so `clasp push` uploads `Code.gs` and `appsscript.json`.
+
+### Manual Deployment (Fallback)
+
+1. Open [script.google.com](https://script.google.com), open the project.
 2. Paste the contents of `gas/Code.gs`.
 3. Deploy → New deployment → Web App → Execute as: Me → Who has access: Only myself.
 4. Copy the deployment URL into `.env` as `GOOGLE_APPS_SCRIPT_URL`.
 5. On first run, authorize the script when prompted.
+
+### When to Deploy
+
+Deploy the GAS script whenever `gas/Code.gs` is modified. This is independent of Docker — no container rebuild needed. The automator calls the deployed web app URL at runtime.
 
 ## Updating the Spec
 
