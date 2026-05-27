@@ -66,6 +66,7 @@ class TestRunStats:
         stats = RunStats(
             jobs_discovered=10,
             jobs_scored=8,
+            jobs_prefiltered=0,
             jobs_approved=5,
             jobs_applied=3,
             jobs_skipped=4,
@@ -84,6 +85,7 @@ class TestRunStats:
         stats = RunStats(
             jobs_discovered=0,
             jobs_scored=0,
+            jobs_prefiltered=0,
             jobs_approved=0,
             jobs_applied=0,
             jobs_skipped=0,
@@ -95,6 +97,7 @@ class TestRunStats:
         stats = RunStats(
             jobs_discovered=5,
             jobs_scored=3,
+            jobs_prefiltered=0,
             jobs_approved=2,
             jobs_applied=1,
             jobs_skipped=1,
@@ -116,6 +119,7 @@ class TestGenerateSummaryText:
         stats = RunStats(
             jobs_discovered=12,
             jobs_scored=10,
+            jobs_prefiltered=0,
             jobs_approved=5,
             jobs_applied=3,
             jobs_skipped=5,
@@ -133,6 +137,7 @@ class TestGenerateSummaryText:
         stats = RunStats(
             jobs_discovered=0,
             jobs_scored=0,
+            jobs_prefiltered=0,
             jobs_approved=0,
             jobs_applied=0,
             jobs_skipped=0,
@@ -146,6 +151,7 @@ class TestGenerateSummaryText:
         stats = RunStats(
             jobs_discovered=5,
             jobs_scored=3,
+            jobs_prefiltered=0,
             jobs_approved=2,
             jobs_applied=1,
             jobs_skipped=1,
@@ -163,6 +169,7 @@ class TestGenerateSummaryText:
         stats = RunStats(
             jobs_discovered=999,
             jobs_scored=888,
+            jobs_prefiltered=0,
             jobs_approved=777,
             jobs_applied=666,
             jobs_skipped=555,
@@ -176,6 +183,7 @@ class TestGenerateSummaryText:
         stats = RunStats(
             jobs_discovered=0,
             jobs_scored=0,
+            jobs_prefiltered=0,
             jobs_approved=0,
             jobs_applied=0,
             jobs_skipped=0,
@@ -188,6 +196,7 @@ class TestGenerateSummaryText:
         stats = RunStats(
             jobs_discovered=42,
             jobs_scored=0,
+            jobs_prefiltered=0,
             jobs_approved=0,
             jobs_applied=0,
             jobs_skipped=0,
@@ -210,6 +219,7 @@ class TestStoreRunSummary:
         stats = RunStats(
             jobs_discovered=10,
             jobs_scored=8,
+            jobs_prefiltered=0,
             jobs_approved=5,
             jobs_applied=3,
             jobs_skipped=4,
@@ -236,6 +246,7 @@ class TestStoreRunSummary:
         stats = RunStats(
             jobs_discovered=5,
             jobs_scored=3,
+            jobs_prefiltered=0,
             jobs_approved=2,
             jobs_applied=1,
             jobs_skipped=1,
@@ -253,6 +264,7 @@ class TestStoreRunSummary:
         stats = RunStats(
             jobs_discovered=1,
             jobs_scored=1,
+            jobs_prefiltered=0,
             jobs_approved=0,
             jobs_applied=0,
             jobs_skipped=0,
@@ -287,6 +299,7 @@ class TestEnforceRetention:
                 summary=f"Summary {i}",
                 jobs_discovered=i,
                 jobs_scored=0,
+                jobs_prefiltered=0,
                 jobs_approved=0,
                 jobs_applied=0,
                 jobs_skipped=0,
@@ -311,6 +324,7 @@ class TestEnforceRetention:
                 summary=f"Summary {i}",
                 jobs_discovered=i,
                 jobs_scored=0,
+                jobs_prefiltered=0,
                 jobs_approved=0,
                 jobs_applied=0,
                 jobs_skipped=0,
@@ -335,6 +349,7 @@ class TestEnforceRetention:
                 summary=f"Summary {i}",
                 jobs_discovered=i,
                 jobs_scored=0,
+                jobs_prefiltered=0,
                 jobs_approved=0,
                 jobs_applied=0,
                 jobs_skipped=0,
@@ -372,6 +387,7 @@ class TestGetRecentSummaries:
                 summary=f"Summary {i}",
                 jobs_discovered=i,
                 jobs_scored=0,
+                jobs_prefiltered=0,
                 jobs_approved=0,
                 jobs_applied=0,
                 jobs_skipped=0,
@@ -397,6 +413,7 @@ class TestGetRecentSummaries:
                 summary=f"Summary {i}",
                 jobs_discovered=i,
                 jobs_scored=0,
+                jobs_prefiltered=0,
                 jobs_approved=0,
                 jobs_applied=0,
                 jobs_skipped=0,

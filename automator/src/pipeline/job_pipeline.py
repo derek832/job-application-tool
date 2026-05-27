@@ -1052,22 +1052,33 @@ async def _generate_and_publish_run_summary(
         status_counts: dict[str, int] = dict(result.all())
 
         jobs_discovered = sum(status_counts.values())
-        jobs_scored = (
-            status_counts.get("scored", 0)
-            + status_counts.get("approved_for_apply", 0)
-            + status_counts.get("applying", 0)
-            + status_counts.get("applied", 0)
-            + status_counts.get("apply_failed", 0)
-            + status_counts.get("resume_failed", 0)
-            + status_counts.get("skipped", 0)
+
+        # Count jobs that actually went through Claude scoring (have a fit_score)
+        scored_result = await session.execute(
+            select(func.count(JobRecord.id))
+            .where(JobRecord.run_id == run_id, JobRecord.fit_score.isnot(None))
         )
+        jobs_scored = scored_result.scalar() or 0
+
+        # Pre-filtered = skipped without a score (keyword filter caught them)
+        prefiltered_result = await session.execute(
+            select(func.count(JobRecord.id))
+            .where(
+                JobRecord.run_id == run_id,
+                JobRecord.status == "skipped",
+                JobRecord.fit_score.is_(None),
+            )
+        )
+        jobs_prefiltered = prefiltered_result.scalar() or 0
+
         jobs_approved = (
             status_counts.get("approved_for_apply", 0)
             + status_counts.get("applying", 0)
             + status_counts.get("applied", 0)
         )
         jobs_applied = status_counts.get("applied", 0)
-        jobs_skipped = status_counts.get("skipped", 0)
+        # Skipped after scoring (have a score but it was too low)
+        jobs_skipped = status_counts.get("skipped", 0) - jobs_prefiltered
         jobs_escalated = status_counts.get("scored", 0) + status_counts.get(
             "apply_failed", 0
         ) + status_counts.get("resume_failed", 0)
@@ -1092,6 +1103,7 @@ async def _generate_and_publish_run_summary(
         stats = RunStats(
             jobs_discovered=jobs_discovered,
             jobs_scored=jobs_scored,
+            jobs_prefiltered=jobs_prefiltered,
             jobs_approved=jobs_approved,
             jobs_applied=jobs_applied,
             jobs_skipped=jobs_skipped,

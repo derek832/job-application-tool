@@ -501,6 +501,7 @@ class TestRunSummaryFlow:
         stats = RunStats(
             jobs_discovered=12,
             jobs_scored=10,
+            jobs_prefiltered=0,
             jobs_approved=5,
             jobs_applied=3,
             jobs_skipped=4,
@@ -566,6 +567,7 @@ class TestRunSummaryFlow:
         stats = RunStats(
             jobs_discovered=8,
             jobs_scored=6,
+            jobs_prefiltered=0,
             jobs_approved=2,
             jobs_applied=1,
             jobs_skipped=3,

@@ -31,10 +31,12 @@ class RunStats:
 
     Attributes:
         jobs_discovered: Number of new jobs found during this run.
-        jobs_scored: Number of jobs scored during this run.
+        jobs_scored: Number of jobs scored by Claude during this run.
+        jobs_prefiltered: Number of jobs eliminated by keyword pre-filter
+            (never sent to Claude).
         jobs_approved: Number of jobs auto-approved during this run.
         jobs_applied: Number of jobs applied to during this run.
-        jobs_skipped: Number of jobs skipped during this run.
+        jobs_skipped: Number of jobs skipped after scoring (low fit score).
         jobs_escalated: Number of jobs escalated to the Human Queue this run.
         jobs_applied_from_queue: Number of jobs applied to after being approved
             from the Human Queue since the previous run (inter-run activity).
@@ -43,6 +45,7 @@ class RunStats:
 
     jobs_discovered: int
     jobs_scored: int
+    jobs_prefiltered: int
     jobs_approved: int
     jobs_applied: int
     jobs_skipped: int
@@ -56,8 +59,8 @@ def generate_summary_text(stats: RunStats) -> str:
     """Generate a plain-English summary paragraph from run statistics.
 
     Produces a human-readable summary reporting only NEW activity this run:
-    "Run complete: found 8 new jobs, scored 6, applied to 3, skipped 2,
-    1 needs your review. Also applied to 2 jobs approved from queue. No errors."
+    "Run complete: found 159 new jobs, pre-filtered 77, scored 82, applied to 0,
+    skipped 50, 19 need your review. No errors."
 
     The output is guaranteed to be at most 500 characters.
 
@@ -69,6 +72,8 @@ def generate_summary_text(stats: RunStats) -> str:
     """
     parts = [f"Run complete: found {stats.jobs_discovered} new jobs"]
 
+    if stats.jobs_prefiltered:
+        parts.append(f"pre-filtered {stats.jobs_prefiltered}")
     if stats.jobs_scored:
         parts.append(f"scored {stats.jobs_scored}")
     if stats.jobs_applied:
