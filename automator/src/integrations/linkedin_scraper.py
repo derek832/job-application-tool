@@ -27,6 +27,56 @@ async def _human_delay(min_seconds: float, max_seconds: float) -> None:
     await asyncio.sleep(delay)
 
 
+async def _dismiss_stale_modal(page: Page) -> None:
+    """Dismiss any lingering modal overlay that might block further interactions.
+
+    LinkedIn sometimes shows modal overlays (e.g., "Apply on company website"
+    confirmation, sign-in prompts) that intercept pointer events. If not
+    dismissed, these block all subsequent card clicks in the discovery loop.
+    """
+    modal_selectors = [
+        "div.artdeco-modal-overlay--is-top-layer",
+        "div[data-test-modal-container]",
+        "div.artdeco-modal-overlay",
+    ]
+
+    for selector in modal_selectors:
+        try:
+            modal = await page.query_selector(selector)
+            if modal and await modal.is_visible():
+                # Try to close via the dismiss/close button inside the modal
+                close_btn = await page.query_selector(
+                    "button[data-test-modal-close-btn], "
+                    "button.artdeco-modal__dismiss, "
+                    "button[aria-label='Dismiss'], "
+                    "button[aria-label='Close']"
+                )
+                if close_btn:
+                    await close_btn.click()
+                    await asyncio.sleep(0.5)
+                    logger.debug("stale_modal_dismissed_via_button")
+                    return
+
+                # Fallback: press Escape to close the modal
+                await page.keyboard.press("Escape")
+                await asyncio.sleep(0.5)
+                logger.debug("stale_modal_dismissed_via_escape")
+                return
+        except Exception:
+            continue
+
+    # Final fallback: press Escape anyway in case a modal is present
+    # but not matched by our selectors
+    try:
+        overlay = await page.query_selector("div.artdeco-modal-overlay")
+        if overlay:
+            await page.keyboard.press("Escape")
+            await asyncio.sleep(0.5)
+            logger.debug("stale_modal_dismissed_via_escape_fallback")
+    except Exception:
+        pass
+
+
 async def _extract_external_url(page: Page, job_id: str) -> str | None:
     """Extract the external apply URL from the LinkedIn job detail panel.
 
@@ -128,8 +178,11 @@ async def _extract_external_url(page: Page, job_id: str) -> str | None:
             return external_url
 
     except Exception as exc:
-        # Popup didn't open — button might navigate the current page or do nothing
+        # Popup didn't open — button might have opened a modal overlay instead
         logger.debug("external_url_popup_failed", job_id=job_id, error=str(exc))
+
+        # Dismiss any modal that the button click may have triggered
+        await _dismiss_stale_modal(page)
 
         # Strategy 3: Check if the button has a data attribute with the URL
         try:
@@ -143,6 +196,8 @@ async def _extract_external_url(page: Page, job_id: str) -> str | None:
         except Exception:
             pass
 
+    # Final safety: dismiss any modal that might have appeared during extraction
+    await _dismiss_stale_modal(page)
     return None
 
 
@@ -443,6 +498,9 @@ async def discover_and_extract_jobs(
                     logger.debug("discovery_skipped_known_job", job_id=job_id)
                     continue
 
+                # Dismiss any stale modal before clicking the next card
+                await _dismiss_stale_modal(page)
+
                 # Click the card to load the description in the right panel
                 await card.click()
                 await _human_delay(1.5, 4.0)
@@ -557,6 +615,8 @@ async def discover_and_extract_jobs(
 
             except Exception as exc:
                 logger.warning("discovery_card_error", error=str(exc))
+                # Dismiss any modal that may have caused the error
+                await _dismiss_stale_modal(page)
                 continue
 
         # Paginate
