@@ -25,36 +25,40 @@ logger = structlog.get_logger(__name__)
 # ---------------------------------------------------------------------------
 
 ConfigKey = Literal[
-    "search_config",
-    "goals_profile",
-    "user_profile",
-    "settings",
-    "system_state",
     "api_token",
+    "blacklist_config",
+    "goals_profile",
+    "lan_base_url",
+    "local_score_cutoff",
     "ntfy_enabled",
+    "ntfy_info_topic",
     "ntfy_server_url",
     "ntfy_urgent_topic",
-    "ntfy_info_topic",
-    "lan_base_url",
     "schedule_config",
-    "blacklist_config",
+    "search_config",
+    "settings",
+    "shadow_mode_enabled",
+    "system_state",
+    "user_profile",
 ]
 
 VALID_CONFIG_KEYS: frozenset[str] = frozenset(
     {
-        "search_config",
-        "goals_profile",
-        "user_profile",
-        "settings",
-        "system_state",
         "api_token",
+        "blacklist_config",
+        "goals_profile",
+        "lan_base_url",
+        "local_score_cutoff",
         "ntfy_enabled",
+        "ntfy_info_topic",
         "ntfy_server_url",
         "ntfy_urgent_topic",
-        "ntfy_info_topic",
-        "lan_base_url",
         "schedule_config",
-        "blacklist_config",
+        "search_config",
+        "settings",
+        "shadow_mode_enabled",
+        "system_state",
+        "user_profile",
     }
 )
 

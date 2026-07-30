@@ -97,7 +97,10 @@ function handleWriteAndExport(content) {
   }
 
   // Create a temporary document for the tailored resume
-  var tempDoc = DocumentApp.create("_tailored_resume_temp");
+  // Use the original resume's name so the PDF metadata title is correct
+  var docId = getDocumentId();
+  var originalName = DriveApp.getFileById(docId).getName();
+  var tempDoc = DocumentApp.create(originalName);
   var tempDocId = tempDoc.getId();
 
   try {
@@ -147,7 +150,8 @@ function handleTailorAndExport(replacements) {
   var originalFile = DriveApp.getFileById(docId);
 
   // Copy the original document (preserves all formatting)
-  var copy = originalFile.makeCopy("_tailored_resume_temp");
+  // Use the original name so the exported PDF metadata title is correct
+  var copy = originalFile.makeCopy(originalFile.getName());
   var copyId = copy.getId();
 
   try {

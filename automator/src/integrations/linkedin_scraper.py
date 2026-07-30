@@ -501,8 +501,33 @@ async def discover_and_extract_jobs(
                 # Dismiss any stale modal before clicking the next card
                 await _dismiss_stale_modal(page)
 
-                # Click the card to load the description in the right panel
-                await card.click()
+                # Click the card to load the description in the right panel.
+                # LinkedIn can detach DOM nodes via lazy-loading or list re-renders,
+                # so retry with a fresh element query on detachment errors.
+                try:
+                    await card.click()
+                except Exception as click_exc:
+                    if "not attached to the DOM" in str(click_exc):
+                        logger.debug(
+                            "card_detached_retrying",
+                            job_id=job_id,
+                            error=str(click_exc)[:80],
+                        )
+                        # Re-query the card by its job ID link
+                        fresh_card = await page.query_selector(
+                            f"a[href*='/jobs/view/{job_id}/']"
+                        )
+                        if fresh_card is None:
+                            # Try the parent list item with data attribute
+                            fresh_card = await page.query_selector(
+                                f"li[data-occludable-job-id='{job_id}']"
+                            )
+                        if fresh_card is None:
+                            logger.debug("card_requery_failed", job_id=job_id)
+                            continue
+                        await fresh_card.click()
+                    else:
+                        raise
                 await _human_delay(1.5, 4.0)
 
                 # Extract title and company from the right panel header

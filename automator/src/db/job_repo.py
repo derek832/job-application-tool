@@ -202,9 +202,11 @@ async def get_stats(session: AsyncSession) -> dict[str, int | float]:
     total_result = await session.execute(select(func.count(JobRecord.id)))
     total_discovered = total_result.scalar_one()
 
-    # Total applied
+    # Total applied (includes both auto-applied and manually applied)
     applied_result = await session.execute(
-        select(func.count(JobRecord.id)).where(JobRecord.status == "applied")
+        select(func.count(JobRecord.id)).where(
+            JobRecord.status.in_(["applied", "manually_applied"])
+        )
     )
     total_applied = applied_result.scalar_one()
 

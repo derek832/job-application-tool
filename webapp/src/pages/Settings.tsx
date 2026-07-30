@@ -899,7 +899,7 @@ export function Settings(): React.JSX.Element {
           </FormField>
 
           <div className="grid grid-cols-2 gap-3">
-            <FormField label="Good Fit Threshold">
+            <FormField label="Auto-Apply Score">
               <input
                 type="number"
                 min={0}
@@ -910,8 +910,11 @@ export function Settings(): React.JSX.Element {
                 }
                 className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
               />
+              <p className="text-xs text-gray-400 mt-1">
+                Jobs scoring at or above this are auto-tailored and queued for you to apply. No review needed.
+              </p>
             </FormField>
-            <FormField label="Stretch Threshold">
+            <FormField label="Maybe Pile Score">
               <input
                 type="number"
                 min={0}
@@ -922,12 +925,15 @@ export function Settings(): React.JSX.Element {
                 }
                 className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
               />
+              <p className="text-xs text-gray-400 mt-1">
+                Jobs between this and the auto-apply score go to your review queue. Below this, they're skipped silently.
+              </p>
             </FormField>
-            <FormField label="External Apply Threshold">
+            <FormField label="Auto-Submit Score (Vision Agent)">
               <input
                 type="number"
                 min={0}
-                max={100}
+                max={101}
                 value={form.external_apply_threshold}
                 onChange={(e) =>
                   setForm((f: SettingsType) => ({ ...f, external_apply_threshold: parseInt(e.target.value, 10) || 0 }))
@@ -935,13 +941,13 @@ export function Settings(): React.JSX.Element {
                 className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
               />
               <p className="text-xs text-gray-400 mt-1">
-                Jobs at or above this score auto-submit via Vision Agent. Below this, resume is tailored but you apply manually.
+                Jobs at or above this score attempt auto-submission via Vision Agent. Set to 101 to disable auto-submit entirely.
               </p>
             </FormField>
-            <FormField label="Human Review Threshold">
+            <FormField label="Human Review Threshold (Vision Agent)">
               <input
                 type="number"
-                min={50}
+                min={0}
                 max={100}
                 value={form.human_review_threshold ?? 85}
                 onChange={(e) =>
@@ -950,7 +956,7 @@ export function Settings(): React.JSX.Element {
                 className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
               />
               <p className="text-xs text-gray-400 mt-1">
-                Jobs at or above this score with open-ended questions pause for your review. Below this, Claude auto-fills and submits.
+                During auto-submit, jobs above this score pause for your review on open-ended questions. Irrelevant if Vision Agent is disabled.
               </p>
             </FormField>
           </div>

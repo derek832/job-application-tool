@@ -631,6 +631,7 @@ class TestRunSummaryFlow:
             stats = RunStats(
                 jobs_discovered=i + 1,
                 jobs_scored=i,
+                jobs_prefiltered=0,
                 jobs_approved=0,
                 jobs_applied=0,
                 jobs_skipped=0,
