@@ -31,6 +31,7 @@ from src.api.log_routes import router as log_router
 from src.api.preview_routes import router as preview_router
 from src.api.queue_routes import router as queue_router
 from src.api.run_routes import router as run_router
+from src.api.scoring_trial_routes import router as scoring_trial_router
 from src.api.system_routes import router as system_router
 from src.db.config_repo import get_config, set_config
 from src.db.database import build_engine, get_session, init_db
@@ -247,6 +248,29 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         await recover_pending_timeouts_on_startup(session)
         break
 
+    # Eagerly load LocalScorer (embedding model + trained artifacts)
+    import src.scoring.local_scorer as local_scorer_module
+    from src.scoring.local_scorer import LocalScorer
+
+    try:
+        scorer = LocalScorer(data_dir="data/models")
+        await scorer.initialize()
+        app.state.local_scorer = scorer
+        local_scorer_module._active_scorer = scorer
+        logger.info(
+            "local_scorer_initialized",
+            is_ready=scorer.is_ready,
+            version=scorer.model_version,
+        )
+    except Exception as exc:
+        logger.info(
+            "local_scorer_init_skipped",
+            reason=str(exc),
+            hint="Local scoring will be dormant until model/embeddings are available",
+        )
+        app.state.local_scorer = None
+        local_scorer_module._active_scorer = None
+
     logger.info("startup_complete", host="0.0.0.0", port=7432)
 
     yield
@@ -283,6 +307,7 @@ app.include_router(preview_router)
 app.include_router(health_router)
 app.include_router(chrome_router)
 app.include_router(escalation_router)
+app.include_router(scoring_trial_router)
 
 
 # ---------------------------------------------------------------------------

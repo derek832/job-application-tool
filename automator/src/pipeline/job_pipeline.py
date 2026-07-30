@@ -34,6 +34,7 @@ from src.pipeline.health_checker import check_session_health
 from src.pipeline.notification_service import NotificationSettings, send_run_summary
 from src.pipeline.run_summary import RunStats, generate_summary_text, store_run_summary
 from src.pipeline.scoring_stage import run_scoring
+from src.pipeline.shadow_scoring import run_shadow_scoring, store_comparison
 from src.pipeline.tailoring_stage import restore_resume_base, run_tailoring
 
 logger = structlog.get_logger(__name__)
@@ -306,19 +307,28 @@ async def run_pipeline(session: AsyncSession | None = None) -> None:
                 )
                 logger.info("pipeline_running_search_query", keywords=query_keywords)
 
-                query_results = await discover_and_extract_jobs(
-                    page=page,
-                    config=query_config,
-                    session=session,
-                    max_pages=5,
-                    known_job_ids=known_job_ids,
-                )
-                discovered.extend(query_results)
-                logger.info(
-                    "pipeline_query_completed",
-                    keywords=query_keywords,
-                    jobs_found=len(query_results),
-                )
+                try:
+                    query_results = await discover_and_extract_jobs(
+                        page=page,
+                        config=query_config,
+                        session=session,
+                        max_pages=5,
+                        known_job_ids=known_job_ids,
+                    )
+                    discovered.extend(query_results)
+                    logger.info(
+                        "pipeline_query_completed",
+                        keywords=query_keywords,
+                        jobs_found=len(query_results),
+                    )
+                except Exception as query_exc:
+                    logger.error(
+                        "pipeline_query_failed",
+                        keywords=query_keywords,
+                        error=str(query_exc)[:200],
+                    )
+                    # Continue with remaining queries rather than killing the run
+                    continue
 
             # Limit to 5 jobs in dry run mode to control costs
             if settings.dry_run and len(discovered) > 5:
@@ -462,6 +472,25 @@ async def run_pipeline(session: AsyncSession | None = None) -> None:
                 extracted_jobs = await _get_jobs_by_status(session, "extracted")
                 resume_content = await _load_resume_content(gdocs_client)
 
+                # Shadow scoring config: read trial settings
+                shadow_mode_enabled = bool(
+                    await get_config(session, "shadow_mode_enabled")
+                )
+                local_score_cutoff_raw = await get_config(session, "local_score_cutoff")
+                local_score_cutoff: int = (
+                    int(local_score_cutoff_raw) if local_score_cutoff_raw is not None else 40
+                )
+
+                # Get local_scorer instance (set up on app.state by startup in task 10.1)
+                local_scorer = None
+                if shadow_mode_enabled:
+                    try:
+                        from src.scoring.local_scorer import _active_scorer
+
+                        local_scorer = _active_scorer
+                    except Exception:
+                        local_scorer = None
+
                 # Append supplementary context (work notes, detailed experience) so
                 # Claude has richer context for scoring and tailoring without polluting
                 # the actual resume used for PDF export.
@@ -579,6 +608,21 @@ async def run_pipeline(session: AsyncSession | None = None) -> None:
                         continue
 
                     try:
+                        # Shadow scoring: run local scorer before Claude (does NOT affect pipeline)
+                        local_score: int | None = None
+                        if (
+                            shadow_mode_enabled
+                            and local_scorer is not None
+                            and local_scorer.is_ready
+                        ):
+                            local_score = await run_shadow_scoring(
+                                job_record=job_record,
+                                session=session,
+                                local_scorer=local_scorer,
+                                cutoff=local_score_cutoff,
+                            )
+
+                        # Claude scoring (unchanged — drives all pipeline decisions)
                         await run_scoring(
                             job_record=job_record,
                             session=session,
@@ -590,6 +634,35 @@ async def run_pipeline(session: AsyncSession | None = None) -> None:
                             stretch_threshold=settings.stretch_threshold,
                             notification_settings=notification_settings,
                         )
+
+                        # Store comparison record after Claude scoring completes
+                        if shadow_mode_enabled:
+                            model_version = (
+                                local_scorer.model_version
+                                if local_scorer is not None
+                                else None
+                            )
+                            await store_comparison(
+                                session=session,
+                                job_id=job_record.id,
+                                local_score=local_score,
+                                claude_score=job_record.fit_score,
+                                model_version=model_version,
+                                cutoff=local_score_cutoff,
+                            )
+                            logger.info(
+                                "shadow_scoring_comparison_stored",
+                                job_id=job_record.id,
+                                local_score=local_score,
+                                claude_score=job_record.fit_score,
+                                score_difference=(
+                                    (job_record.fit_score - local_score)
+                                    if local_score is not None
+                                    else None
+                                ),
+                                model_version=model_version,
+                            )
+
                         logger.info(
                             "pipeline_scoring_completed",
                             job_id=job_record.id,

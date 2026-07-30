@@ -665,3 +665,52 @@ class NotificationQueue(Base):
             f"<NotificationQueue id={self.id} reason={self.trigger_reason!r} "
             f"delivered={self.delivered}>"
         )
+
+
+# ---------------------------------------------------------------------------
+# ScoringComparison (Local Scoring Trial)
+# ---------------------------------------------------------------------------
+
+
+class ScoringComparison(Base):
+    """Side-by-side scoring comparison record for the local scoring trial.
+
+    Maps to the ``scoring_comparisons`` table. Each row captures the local
+    scorer's prediction alongside Claude's actual score for a single job,
+    enabling accuracy analysis during the trial period.
+
+    Attributes:
+        id: Auto-incrementing surrogate primary key.
+        job_id: Foreign key referencing ``job_records.id``.
+        local_score: Local model's predicted fit score 0–100; NULL if prediction failed.
+        claude_score: Claude's authoritative fit score 0–100.
+        score_difference: ``claude_score - local_score``; NULL if local_score is NULL.
+        would_skip: 1 if the local score fell below the skip cutoff, else 0.
+        model_version: Identifier of the local model version used (e.g. 'v3_870samples').
+        scored_at: ISO 8601 timestamp when the comparison was recorded.
+    """
+
+    __tablename__ = "scoring_comparisons"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    job_id: Mapped[str] = mapped_column(
+        Text, ForeignKey("job_records.id", ondelete="CASCADE"), nullable=False
+    )
+    local_score: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    claude_score: Mapped[int] = mapped_column(Integer, nullable=False)
+    score_difference: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    would_skip: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    model_version: Mapped[str | None] = mapped_column(Text, nullable=True)
+    scored_at: Mapped[str] = mapped_column(Text, nullable=False)
+
+    __table_args__ = (
+        Index("idx_scoring_comparisons_job_id", "job_id"),
+        Index("idx_scoring_comparisons_scored_at", "scored_at"),
+        Index("idx_scoring_comparisons_claude_score", "claude_score"),
+    )
+
+    def __repr__(self) -> str:
+        return (
+            f"<ScoringComparison id={self.id} job_id={self.job_id!r} "
+            f"local={self.local_score} claude={self.claude_score} diff={self.score_difference}>"
+        )

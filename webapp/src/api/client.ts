@@ -716,6 +716,117 @@ export async function removeBlacklistTitle(entry: string): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
+// Scoring Trial
+// ---------------------------------------------------------------------------
+
+export const ScoringComparisonResponseSchema = z.object({
+  id: z.number().int(),
+  job_id: z.string(),
+  job_title: z.string().nullable(),
+  company: z.string().nullable(),
+  local_score: z.number().int().nullable(),
+  claude_score: z.number().int(),
+  score_difference: z.number().int().nullable(),
+  would_skip: z.boolean(),
+  scored_at: z.string(),
+});
+
+export const PaginatedComparisonsSchema = z.object({
+  items: z.array(ScoringComparisonResponseSchema),
+  total: z.number().int(),
+  page: z.number().int(),
+  page_size: z.number().int(),
+});
+
+export type ScoringComparisonResponse = z.infer<typeof ScoringComparisonResponseSchema>;
+export type PaginatedComparisons = z.infer<typeof PaginatedComparisonsSchema>;
+
+export interface GetComparisonsParams {
+  date_from?: string;
+  date_to?: string;
+  min_claude_score?: number;
+  page?: number;
+  page_size?: number;
+}
+
+export async function getScoringTrialComparisons(params?: GetComparisonsParams): Promise<PaginatedComparisons> {
+  const query = new URLSearchParams();
+  if (params?.date_from) query.set("date_from", params.date_from);
+  if (params?.date_to) query.set("date_to", params.date_to);
+  if (params?.min_claude_score !== undefined) query.set("min_claude_score", String(params.min_claude_score));
+  if (params?.page !== undefined) query.set("page", String(params.page));
+  if (params?.page_size !== undefined) query.set("page_size", String(params.page_size));
+
+  const qs = query.toString();
+  const path = qs ? `/scoring-trial/comparisons?${qs}` : "/scoring-trial/comparisons";
+  return request(path, PaginatedComparisonsSchema);
+}
+
+// Scoring Trial — Status, Retrain, Config
+
+export const ScoringTrialStatusSchema = z.object({
+  model_trained: z.boolean(),
+  training_samples_count: z.number().int(),
+  model_version: z.string().nullable(),
+  shadow_mode_active: z.boolean(),
+  total_predictions_made: z.number().int(),
+});
+
+export const RetrainResponseSchema = z.object({
+  success: z.boolean(),
+  sample_count: z.number().int(),
+  model_version: z.string(),
+  duration_seconds: z.number(),
+});
+
+export const ScoringTrialConfigSchema = z.object({
+  shadow_mode_enabled: z.boolean(),
+  cutoff: z.number().int(),
+});
+
+export type ScoringTrialStatus = z.infer<typeof ScoringTrialStatusSchema>;
+export type RetrainResponse = z.infer<typeof RetrainResponseSchema>;
+export type ScoringTrialConfig = z.infer<typeof ScoringTrialConfigSchema>;
+
+export interface ScoringTrialConfigUpdate {
+  shadow_mode_enabled?: boolean;
+  cutoff?: number;
+}
+
+export async function getScoringTrialStatus(): Promise<ScoringTrialStatus> {
+  return request("/scoring-trial/status", ScoringTrialStatusSchema);
+}
+
+export async function triggerScoringTrialRetrain(): Promise<RetrainResponse> {
+  return request("/scoring-trial/retrain", RetrainResponseSchema, { method: "POST" });
+}
+
+export async function updateScoringTrialConfig(data: ScoringTrialConfigUpdate): Promise<ScoringTrialConfig> {
+  return request("/scoring-trial/config", ScoringTrialConfigSchema, {
+    method: "PUT",
+    body: JSON.stringify(data),
+  });
+}
+
+export const TrialMetricsResponseSchema = z.object({
+  total_compared: z.number().int(),
+  mean_absolute_error: z.number(),
+  recall_at_cutoff: z.number(),
+  false_positive_count: z.number().int(),
+  cutoff: z.number().int(),
+});
+
+export type TrialMetricsResponse = z.infer<typeof TrialMetricsResponseSchema>;
+
+export async function getScoringTrialMetrics(cutoff?: number): Promise<TrialMetricsResponse> {
+  const query = new URLSearchParams();
+  if (cutoff !== undefined) query.set("cutoff", String(cutoff));
+  const qs = query.toString();
+  const path = qs ? `/scoring-trial/metrics?${qs}` : "/scoring-trial/metrics";
+  return request(path, TrialMetricsResponseSchema);
+}
+
+// ---------------------------------------------------------------------------
 // Escalations
 // ---------------------------------------------------------------------------
 

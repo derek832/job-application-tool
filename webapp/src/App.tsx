@@ -16,6 +16,7 @@ import { ProfileConfig } from "./pages/ProfileConfig";
 import { Settings } from "./pages/Settings";
 import { PreviewResults } from "./pages/PreviewResults";
 import { BlacklistConfig } from "./pages/BlacklistConfig";
+import { ScoringTrial } from "./pages/ScoringTrial";
 
 const POLL_INTERVAL_MS = 60_000;
 
@@ -118,6 +119,8 @@ function App() {
         return <PreviewResults runId={previewRunId} />;
       case "blacklist":
         return <BlacklistConfig />;
+      case "scoring-trial":
+        return <ScoringTrial />;
     }
   }
 
