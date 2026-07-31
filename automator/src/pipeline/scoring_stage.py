@@ -142,15 +142,15 @@ async def run_scoring(
         )
 
     elif classification == "good_fit":
-        # Good fit and not boundary → approved_for_apply
+        # Good fit and not boundary → auto-tailor (pipeline picks up immediately)
         await update_job_status(
             session,
             job_record.id,
-            "approved_for_apply",
-            reason=f"Good fit (score={result.fit_score})",
+            "scored",
+            reason=f"Good fit (score={result.fit_score}), auto-tailoring",
         )
         logger.info(
-            "job_approved_for_apply",
+            "job_good_fit_for_tailoring",
             job_id=job_record.id,
             fit_score=result.fit_score,
         )

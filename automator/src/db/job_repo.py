@@ -19,7 +19,7 @@ logger = structlog.get_logger(__name__)
 
 # Terminal statuses — jobs in these states are no longer actionable in the queue.
 TERMINAL_STATUSES: frozenset[str] = frozenset(
-    {"applied", "skipped", "rejected_by_user", "manually_applied"}
+    {"applied", "skipped", "declined"}
 )
 
 
@@ -249,20 +249,26 @@ async def get_stats(session: AsyncSession) -> dict[str, int | float]:
 
 
 async def get_queue_items(session: AsyncSession) -> list[JobRecord]:
-    """Return all JobRecords currently in the human queue.
+    """Return all JobRecords currently visible in the review queue.
 
-    A job is considered "in the queue" when it has a non-null ``queue_reason``
-    and its status is not in a terminal state (applied, skipped,
-    rejected_by_user, manually_applied).
+    Two categories of jobs appear in the queue:
+    1. "Needs Review": status=scored with a non-null queue_reason
+       (threshold/stretch jobs awaiting user decision)
+    2. "Ready to Apply": status=tailored
+       (resume tailored, PDF ready, awaiting user action)
 
     Returns:
-        List of ``JobRecord`` instances awaiting human review.
+        List of ``JobRecord`` instances for the queue UI.
     """
     query = (
         select(JobRecord)
         .where(
-            JobRecord.queue_reason.isnot(None),
-            JobRecord.status.notin_(TERMINAL_STATUSES),
+            or_(
+                # Needs Review: scored with a queue reason
+                (JobRecord.status == "scored") & (JobRecord.queue_reason.isnot(None)),
+                # Ready to Apply: tailored (PDF ready)
+                JobRecord.status == "tailored",
+            )
         )
         .order_by(JobRecord.updated_at.desc())
     )

@@ -282,6 +282,8 @@ class QueueItemOut(BaseModel):
         queue_reason: Reason the job was escalated to the queue.
         fit_score: Claude-assigned fit score (may be None if not yet scored).
         fit_rationale: Claude's explanation of the score.
+        status: Current job status (scored, tailored, etc.).
+        tailored_resume_pdf: Path to tailored PDF if available.
         added_at: ISO 8601 timestamp when the item was added to the queue.
     """
 
@@ -294,6 +296,8 @@ class QueueItemOut(BaseModel):
     queue_reason: str | None = None
     fit_score: int | None = None
     fit_rationale: str | None = None
+    status: str
+    tailored_resume_pdf: str | None = None
     added_at: str
 
 

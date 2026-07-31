@@ -1,4 +1,4 @@
-"""Unit tests for the resume tailoring pipeline stage."""
+﻿"""Unit tests for the resume tailoring pipeline stage."""
 
 from __future__ import annotations
 
@@ -67,7 +67,7 @@ def sms_settings() -> NotificationSettings:
 
 @pytest.mark.asyncio
 async def test_tailoring_success(async_session: AsyncSession, sample_job_record: JobRecord):
-    """On successful tailoring, status becomes 'applying' and PDF path is stored."""
+    """On successful tailoring, status becomes 'tailored' and PDF path is stored."""
     resume_base = "Original resume content with skills and experience."
     replacements_json = '[{"find": "skills", "replace": "ATS keywords"}]'
 
@@ -88,7 +88,7 @@ async def test_tailoring_success(async_session: AsyncSession, sample_job_record:
     )
 
     await async_session.refresh(sample_job_record)
-    assert sample_job_record.status == "applying"
+    assert sample_job_record.status == "tailored"
     assert sample_job_record.resume_snapshot == json.dumps(resume_base)
     assert sample_job_record.tailored_resume_pdf == "data/pdfs/TechCo_Backend_Engineer_Resume.pdf"
     assert sample_job_record.error_message is None
@@ -223,7 +223,7 @@ async def test_tailoring_gdocs_authorization_error_sets_system_state(
 async def test_tailoring_gdocs_non_auth_error_sets_resume_failed(
     async_session: AsyncSession, sample_job_record: JobRecord, sms_settings: NotificationSettings
 ):
-    """On non-authorization GDocsError, status becomes 'resume_failed'."""
+    """On non-authorization GDocsError, status becomes 'scored'."""
     gdocs_client = AsyncMock()
     gdocs_client.read_resume.side_effect = GDocsError(
         "Network timeout after 3 attempts", authorization_expired=False
@@ -241,7 +241,7 @@ async def test_tailoring_gdocs_non_auth_error_sets_resume_failed(
         )
 
     await async_session.refresh(sample_job_record)
-    assert sample_job_record.status == "resume_failed"
+    assert sample_job_record.status == "scored"
     assert sample_job_record.queue_reason == "resume_tailoring_failed"
     assert sample_job_record.error_message == "Network timeout after 3 attempts"
 
@@ -255,7 +255,7 @@ async def test_tailoring_gdocs_non_auth_error_sets_resume_failed(
 async def test_tailoring_claude_error_sets_resume_failed(
     async_session: AsyncSession, sample_job_record: JobRecord, sms_settings: NotificationSettings
 ):
-    """On TailoringError from Claude, status becomes 'resume_failed'."""
+    """On TailoringError from Claude, status becomes 'scored'."""
     resume_base = "Original resume"
 
     gdocs_client = AsyncMock()
@@ -276,7 +276,7 @@ async def test_tailoring_claude_error_sets_resume_failed(
         )
 
     await async_session.refresh(sample_job_record)
-    assert sample_job_record.status == "resume_failed"
+    assert sample_job_record.status == "scored"
     assert sample_job_record.queue_reason == "resume_tailoring_failed"
     assert "Claude API" in sample_job_record.error_message
 
@@ -287,7 +287,7 @@ async def test_tailoring_claude_error_sets_resume_failed(
 async def test_tailoring_write_failure_sets_resume_failed(
     async_session: AsyncSession, sample_job_record: JobRecord
 ):
-    """On GDocsError during tailor_and_export, status becomes 'resume_failed'."""
+    """On GDocsError during tailor_and_export, status becomes 'scored'."""
     replacements_json = '[{"find": "skills", "replace": "ATS keywords"}]'
 
     gdocs_client = AsyncMock()
@@ -309,7 +309,7 @@ async def test_tailoring_write_failure_sets_resume_failed(
         )
 
     await async_session.refresh(sample_job_record)
-    assert sample_job_record.status == "resume_failed"
+    assert sample_job_record.status == "scored"
     assert sample_job_record.queue_reason == "resume_tailoring_failed"
 
 
@@ -317,7 +317,7 @@ async def test_tailoring_write_failure_sets_resume_failed(
 async def test_tailoring_export_pdf_failure_sets_resume_failed(
     async_session: AsyncSession, sample_job_record: JobRecord
 ):
-    """On GDocsError during tailor_and_export, status becomes 'resume_failed'."""
+    """On GDocsError during tailor_and_export, status becomes 'scored'."""
     replacements_json = '[{"find": "skills", "replace": "ATS keywords"}]'
 
     gdocs_client = AsyncMock()
@@ -339,7 +339,7 @@ async def test_tailoring_export_pdf_failure_sets_resume_failed(
         )
 
     await async_session.refresh(sample_job_record)
-    assert sample_job_record.status == "resume_failed"
+    assert sample_job_record.status == "scored"
     assert sample_job_record.queue_reason == "resume_tailoring_failed"
 
 
@@ -368,7 +368,7 @@ async def test_tailoring_no_sms_settings_skips_notification(
     mock_notify.assert_not_called()
 
     await async_session.refresh(sample_job_record)
-    assert sample_job_record.status == "resume_failed"
+    assert sample_job_record.status == "scored"
 
 
 # ---------------------------------------------------------------------------
@@ -485,7 +485,7 @@ async def test_restore_resume_base_invalid_json(async_session: AsyncSession):
     mock_client = AsyncMock()
     mock_client.write_resume = AsyncMock(return_value=None)
 
-    # Should not raise — errors are handled gracefully
+    # Should not raise â€” errors are handled gracefully
     await restore_resume_base(record, mock_client, async_session)
 
     mock_client.write_resume.assert_not_called()
@@ -502,7 +502,7 @@ async def test_restore_resume_base_gdocs_error_does_not_raise(
         side_effect=GDocsError("Network timeout after 3 attempts")
     )
 
-    # Should not raise — errors are handled gracefully
+    # Should not raise â€” errors are handled gracefully
     await restore_resume_base(applied_job_with_snapshot, mock_client, async_session)
 
     mock_client.write_resume.assert_called_once()

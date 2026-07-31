@@ -680,11 +680,15 @@ async def run_pipeline(session: AsyncSession | None = None) -> None:
         else:
             logger.info("pipeline_discovery_and_scoring_skipped")
 
-        # Step 9: Run tailoring and application for "approved_for_apply" jobs
+        # Step 9: Run tailoring for scored good-fit jobs (no queue_reason)
         if claude_client and gdocs_client:
-            approved_jobs = await _get_jobs_by_status(session, "approved_for_apply")
+            # Good-fit jobs are scored without a queue_reason — they go straight to tailoring
+            scored_for_tailoring = [
+                j for j in await _get_jobs_by_status(session, "scored")
+                if not j.queue_reason
+            ]
 
-            for job_record in approved_jobs:
+            for job_record in scored_for_tailoring:
                 try:
                     # Run tailoring
                     await run_tailoring(
@@ -697,63 +701,33 @@ async def run_pipeline(session: AsyncSession | None = None) -> None:
                         user_full_name=user_profile.full_name,
                     )
 
-                    # Only proceed to apply if tailoring succeeded (status is "applying")
+                    # Check if tailoring succeeded (status should be "tailored")
                     await session.refresh(job_record)
-                    if job_record.status != "applying":
+                    if job_record.status != "tailored":
                         logger.info(
-                            "pipeline_apply_skipped_tailoring_failed",
+                            "pipeline_tailoring_did_not_complete",
                             job_id=job_record.id,
                             status=job_record.status,
                         )
                         continue
 
-                    # DRY RUN: skip actual submission, log what would happen
-                    if settings.dry_run:
-                        from src.db.job_repo import update_job_status
-
-                        logger.info(
-                            "pipeline_dry_run_skip_submit",
-                            job_id=job_record.id,
-                            job_title=job_record.job_title,
-                            company=job_record.company,
-                            apply_type=job_record.apply_type,
-                            message="Dry run — skipping actual submission",
-                        )
-                        await update_job_status(
-                            session,
-                            job_record.id,
-                            "applied",
-                            reason="Dry run — submission skipped",
-                        )
-                        job_record.applied_at = datetime.now(UTC).isoformat()
-                    else:
-                        # Application ready — resume is tailored (PDF ready),
-                        # notify user and add to human queue for manual submission.
-                        from src.db.job_repo import update_job_status
+                    # Notify user that resume is ready
+                    if notification_settings:
                         from src.pipeline.notification_service import notify
 
-                        job_record.queue_reason = "resume_ready_apply"
-                        await update_job_status(
-                            session,
-                            job_record.id,
-                            "applying",
-                            reason="Resume tailored, awaiting manual submission",
+                        await notify(
+                            session=session,
+                            job_record=job_record,
+                            trigger_reason="resume_ready_go_apply",
+                            settings=notification_settings,
                         )
 
-                        if notification_settings:
-                            await notify(
-                                session=session,
-                                job_record=job_record,
-                                trigger_reason="resume_ready_go_apply",
-                                settings=notification_settings,
-                            )
-
-                        logger.info(
-                            "pipeline_resume_ready",
-                            job_id=job_record.id,
-                            fit_score=job_record.fit_score,
-                            pdf_path=job_record.tailored_resume_pdf,
-                        )
+                    logger.info(
+                        "pipeline_resume_ready",
+                        job_id=job_record.id,
+                        fit_score=job_record.fit_score,
+                        pdf_path=job_record.tailored_resume_pdf,
+                    )
 
                     # Step 10: Restore resume base after each application
                     await restore_resume_base(
@@ -1064,16 +1038,13 @@ async def _generate_and_publish_run_summary(
         jobs_prefiltered = prefiltered_result.scalar() or 0
 
         jobs_approved = (
-            status_counts.get("approved_for_apply", 0)
-            + status_counts.get("applying", 0)
+            status_counts.get("tailored", 0)
             + status_counts.get("applied", 0)
         )
         jobs_applied = status_counts.get("applied", 0)
         # Skipped after scoring (have a score but it was too low)
         jobs_skipped = status_counts.get("skipped", 0) - jobs_prefiltered
-        jobs_escalated = status_counts.get("scored", 0) + status_counts.get(
-            "apply_failed", 0
-        ) + status_counts.get("resume_failed", 0)
+        jobs_escalated = status_counts.get("scored", 0)
 
         # --- Inter-run activity: jobs approved from queue then applied ---
         # These are jobs that were NOT discovered this run but transitioned

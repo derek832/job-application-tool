@@ -105,6 +105,8 @@ export const QueueItemOutSchema = z.object({
   queue_reason: z.string().nullable(),
   fit_score: z.number().int().nullable(),
   fit_rationale: z.string().nullable(),
+  status: z.string(),
+  tailored_resume_pdf: z.string().nullable(),
   added_at: z.string(),
 });
 
@@ -614,12 +616,16 @@ export async function approveQueueItem(id: string): Promise<void> {
   return requestVoid(`/queue/${encodeURIComponent(id)}/approve`, { method: "POST" });
 }
 
-export async function rejectQueueItem(id: string): Promise<void> {
-  return requestVoid(`/queue/${encodeURIComponent(id)}/reject`, { method: "POST" });
+export async function skipQueueItem(id: string): Promise<void> {
+  return requestVoid(`/queue/${encodeURIComponent(id)}/skip`, { method: "POST" });
 }
 
-export async function markManuallyApplied(id: string): Promise<void> {
-  return requestVoid(`/queue/${encodeURIComponent(id)}/manual`, { method: "POST" });
+export async function markApplied(id: string): Promise<void> {
+  return requestVoid(`/queue/${encodeURIComponent(id)}/applied`, { method: "POST" });
+}
+
+export async function declineQueueItem(id: string): Promise<void> {
+  return requestVoid(`/queue/${encodeURIComponent(id)}/decline`, { method: "POST" });
 }
 
 // ---------------------------------------------------------------------------

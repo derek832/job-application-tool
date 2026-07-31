@@ -169,7 +169,7 @@ async def run_tailoring(
 
     # Step 6: Update job record with PDF path and advance status
     job_record.tailored_resume_pdf = pdf_path
-    await update_job_status(session, job_id, "applying", reason="Resume tailored and PDF exported")
+    await update_job_status(session, job_id, "tailored", reason="Resume tailored and PDF exported")
 
     logger.info("tailoring_stage_completed", job_id=job_id, pdf_path=pdf_path)
 
@@ -279,8 +279,8 @@ async def _handle_tailoring_failure(
 ) -> None:
     """Handle a non-authorization tailoring failure.
 
-    Sets the job status to "resume_failed", records the error, adds to the
-    human queue, and sends a notification if settings are available.
+    Sets the job status to "scored" with error info so it can be retried,
+    adds to the human queue, and sends a notification if settings are available.
     """
     job_id = job_record.id
     logger.error("tailoring_stage_failed", job_id=job_id, error=error_message)
@@ -290,7 +290,7 @@ async def _handle_tailoring_failure(
     await update_job_status(
         session,
         job_id,
-        "resume_failed",
+        "scored",
         reason=f"Resume tailoring failed: {error_message}",
     )
 

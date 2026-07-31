@@ -2,8 +2,9 @@ import { useState, useEffect } from "react";
 import {
   getQueue,
   approveQueueItem,
-  rejectQueueItem,
-  markManuallyApplied,
+  skipQueueItem,
+  markApplied,
+  declineQueueItem,
   ApiError,
 } from "../api/client";
 import type { QueueItemOut } from "../api/client";
@@ -23,6 +24,7 @@ export function HumanQueue(): React.JSX.Element {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [actionId, setActionId] = useState<string | null>(null);
+  const [toast, setToast] = useState<string | null>(null);
 
   async function fetchQueue() {
     try {
@@ -38,17 +40,58 @@ export function HumanQueue(): React.JSX.Element {
 
   useEffect(() => {
     fetchQueue();
+    // Poll every 15s to catch background tailoring completions
+    const interval = setInterval(fetchQueue, 15_000);
+    return () => clearInterval(interval);
   }, []);
 
-  async function handleAction(
-    id: string,
-    action: "approve" | "reject" | "manual"
-  ) {
+  function showToast(message: string) {
+    setToast(message);
+    setTimeout(() => setToast(null), 4000);
+  }
+
+  async function handleApprove(id: string, title: string) {
     setActionId(id);
     try {
-      if (action === "approve") await approveQueueItem(id);
-      else if (action === "reject") await rejectQueueItem(id);
-      else await markManuallyApplied(id);
+      await approveQueueItem(id);
+      setItems((prev) => prev.filter((item) => item.job_id !== id));
+      showToast(`"${title}" approved — tailoring in progress...`);
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : "Action failed");
+    } finally {
+      setActionId(null);
+    }
+  }
+
+  async function handleSkip(id: string) {
+    setActionId(id);
+    try {
+      await skipQueueItem(id);
+      setItems((prev) => prev.filter((item) => item.job_id !== id));
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : "Action failed");
+    } finally {
+      setActionId(null);
+    }
+  }
+
+  async function handleApplied(id: string) {
+    setActionId(id);
+    try {
+      await markApplied(id);
+      setItems((prev) => prev.filter((item) => item.job_id !== id));
+      showToast("Marked as applied ✓");
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : "Action failed");
+    } finally {
+      setActionId(null);
+    }
+  }
+
+  async function handleDecline(id: string) {
+    setActionId(id);
+    try {
+      await declineQueueItem(id);
       setItems((prev) => prev.filter((item) => item.job_id !== id));
     } catch (e) {
       setError(e instanceof ApiError ? e.message : "Action failed");
@@ -59,9 +102,18 @@ export function HumanQueue(): React.JSX.Element {
 
   if (loading) return <LoadingSkeleton />;
 
+  const readyToApply = items.filter((i) => i.status === "tailored");
+  const needsReview = items.filter((i) => i.status === "scored");
+
   return (
-    <div className="p-6 space-y-5">
+    <div className="p-6 space-y-6">
       <h2 className="text-lg font-semibold text-gray-900">Review Queue</h2>
+
+      {toast && (
+        <div className="bg-green-50 border border-green-200 rounded-lg p-3 text-sm text-green-700 animate-fade-in">
+          {toast}
+        </div>
+      )}
 
       {error && (
         <div className="bg-red-50 border border-red-200 rounded-lg p-3 text-sm text-red-700">
@@ -72,32 +124,133 @@ export function HumanQueue(): React.JSX.Element {
       {items.length === 0 ? (
         <EmptyState />
       ) : (
-        <div className="space-y-3">
-          {items.map((item) => (
-            <QueueCard
-              key={item.job_id}
-              item={item}
-              disabled={actionId === item.job_id}
-              onApprove={() => handleAction(item.job_id, "approve")}
-              onReject={() => handleAction(item.job_id, "reject")}
-              onManual={() => handleAction(item.job_id, "manual")}
-            />
-          ))}
-        </div>
+        <>
+          {/* Ready to Apply Section */}
+          {readyToApply.length > 0 && (
+            <section>
+              <h3 className="text-sm font-medium text-gray-700 mb-3 flex items-center gap-2">
+                <span className="w-2 h-2 rounded-full bg-green-500" />
+                Ready to Apply ({readyToApply.length})
+              </h3>
+              <div className="space-y-3">
+                {readyToApply.map((item) => (
+                  <ReadyCard
+                    key={item.job_id}
+                    item={item}
+                    disabled={actionId === item.job_id}
+                    onApplied={() => handleApplied(item.job_id)}
+                    onDecline={() => handleDecline(item.job_id)}
+                  />
+                ))}
+              </div>
+            </section>
+          )}
+
+          {/* Needs Review Section */}
+          {needsReview.length > 0 && (
+            <section>
+              <h3 className="text-sm font-medium text-gray-700 mb-3 flex items-center gap-2">
+                <span className="w-2 h-2 rounded-full bg-amber-500" />
+                Needs Review ({needsReview.length})
+              </h3>
+              <div className="space-y-3">
+                {needsReview.map((item) => (
+                  <ReviewCard
+                    key={item.job_id}
+                    item={item}
+                    disabled={actionId === item.job_id}
+                    onApprove={() => handleApprove(item.job_id, item.job_title)}
+                    onSkip={() => handleSkip(item.job_id)}
+                  />
+                ))}
+              </div>
+            </section>
+          )}
+        </>
       )}
     </div>
   );
 }
 
-interface QueueCardProps {
+// ---------------------------------------------------------------------------
+// Ready to Apply card — job is tailored, PDF ready
+// ---------------------------------------------------------------------------
+
+interface ReadyCardProps {
+  item: QueueItemOut;
+  disabled: boolean;
+  onApplied: () => void;
+  onDecline: () => void;
+}
+
+function ReadyCard({ item, disabled, onApplied, onDecline }: ReadyCardProps): React.JSX.Element {
+  return (
+    <div className="bg-white rounded-xl border border-green-100 p-4 shadow-sm">
+      <div className="flex items-start justify-between gap-3 mb-3">
+        <div className="min-w-0">
+          <a
+            href={item.linkedin_url}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-sm font-semibold text-blue-700 hover:text-blue-900 hover:underline truncate block"
+          >
+            {item.job_title}
+          </a>
+          <p className="text-xs text-gray-500 mt-0.5">{item.company}</p>
+        </div>
+        {item.fit_score !== null && (
+          <span className="shrink-0 inline-flex items-center px-2 py-0.5 rounded-md text-xs font-medium bg-green-50 text-green-700">
+            {item.fit_score}%
+          </span>
+        )}
+      </div>
+
+      {/* Action buttons */}
+      <div className="flex items-center gap-2">
+        {item.tailored_resume_pdf && (
+          <a
+            href={`/api/jobs/${item.job_id}/pdf`}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-blue-700 bg-blue-50 rounded-lg hover:bg-blue-100 transition-colors"
+          >
+            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+            </svg>
+            PDF
+          </a>
+        )}
+        <button
+          onClick={onApplied}
+          disabled={disabled}
+          className="flex-1 px-3 py-1.5 text-xs font-medium text-green-700 bg-green-50 rounded-lg hover:bg-green-100 disabled:opacity-50 transition-colors"
+        >
+          Applied ✓
+        </button>
+        <button
+          onClick={onDecline}
+          disabled={disabled}
+          className="px-3 py-1.5 text-xs font-medium text-gray-500 bg-gray-100 rounded-lg hover:bg-gray-200 disabled:opacity-50 transition-colors"
+        >
+          Decline
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Needs Review card — threshold/stretch job, needs approval or skip
+// ---------------------------------------------------------------------------
+
+interface ReviewCardProps {
   item: QueueItemOut;
   disabled: boolean;
   onApprove: () => void;
-  onReject: () => void;
-  onManual: () => void;
+  onSkip: () => void;
 }
 
-function QueueCard({ item, disabled, onApprove, onReject, onManual }: QueueCardProps): React.JSX.Element {
+function ReviewCard({ item, disabled, onApprove, onSkip }: ReviewCardProps): React.JSX.Element {
   return (
     <div className="bg-white rounded-xl border border-gray-200 p-4 shadow-sm">
       <div className="flex items-start justify-between gap-3 mb-3">
@@ -113,7 +266,7 @@ function QueueCard({ item, disabled, onApprove, onReject, onManual }: QueueCardP
           <p className="text-xs text-gray-500 mt-0.5">{item.company}</p>
         </div>
         {item.fit_score !== null && (
-          <span className="shrink-0 inline-flex items-center px-2 py-0.5 rounded-md text-xs font-medium bg-blue-50 text-blue-700">
+          <span className="shrink-0 inline-flex items-center px-2 py-0.5 rounded-md text-xs font-medium bg-amber-50 text-amber-700">
             {item.fit_score}%
           </span>
         )}
@@ -122,7 +275,7 @@ function QueueCard({ item, disabled, onApprove, onReject, onManual }: QueueCardP
       <div className="flex items-center gap-2 mb-3">
         {item.queue_reason && (
           <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-amber-50 text-amber-700">
-            {item.queue_reason}
+            {item.queue_reason === "stretch_role" ? "Stretch Role" : "Threshold Score"}
           </span>
         )}
         <span className="text-xs text-gray-400">{formatTime(item.added_at)}</span>
@@ -140,26 +293,23 @@ function QueueCard({ item, disabled, onApprove, onReject, onManual }: QueueCardP
           disabled={disabled}
           className="flex-1 px-3 py-1.5 text-xs font-medium text-green-700 bg-green-50 rounded-lg hover:bg-green-100 disabled:opacity-50 transition-colors"
         >
-          Approve
+          Approve & Tailor
         </button>
         <button
-          onClick={onReject}
+          onClick={onSkip}
           disabled={disabled}
-          className="flex-1 px-3 py-1.5 text-xs font-medium text-red-700 bg-red-50 rounded-lg hover:bg-red-100 disabled:opacity-50 transition-colors"
+          className="flex-1 px-3 py-1.5 text-xs font-medium text-gray-500 bg-gray-100 rounded-lg hover:bg-gray-200 disabled:opacity-50 transition-colors"
         >
-          Reject
-        </button>
-        <button
-          onClick={onManual}
-          disabled={disabled}
-          className="flex-1 px-3 py-1.5 text-xs font-medium text-gray-700 bg-gray-100 rounded-lg hover:bg-gray-200 disabled:opacity-50 transition-colors"
-        >
-          Manual
+          Skip
         </button>
       </div>
     </div>
   );
 }
+
+// ---------------------------------------------------------------------------
+// Empty state and loading
+// ---------------------------------------------------------------------------
 
 function EmptyState(): React.JSX.Element {
   return (

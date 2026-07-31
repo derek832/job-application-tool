@@ -401,16 +401,16 @@ async def test_pipeline_calls_all_stages_in_order(async_session: AsyncSession):
 
     async def mock_scoring_fn(*args, **kwargs):
         call_order.append("scoring")
-        # Simulate scoring advancing the job to "approved_for_apply"
+        # Simulate scoring — good fit stays at "scored" with no queue_reason
         job_record = kwargs.get("job_record") or args[0]
-        job_record.status = "approved_for_apply"
+        job_record.status = "scored"
+        job_record.queue_reason = None
 
     async def mock_tailoring_fn(*args, **kwargs):
         call_order.append("tailoring")
-        # Simulate tailoring advancing the job to "applying" (must persist to DB
-        # because the pipeline does session.refresh after tailoring)
+        # Simulate tailoring advancing the job to "tailored"
         job_record = kwargs.get("job_record") or args[0]
-        job_record.status = "applying"
+        job_record.status = "tailored"
         sess = kwargs.get("session") or args[1]
         await sess.flush()
 

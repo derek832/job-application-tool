@@ -139,6 +139,20 @@ async def get_session() -> AsyncGenerator[AsyncSession, None]:
             await session.close()
 
 
+def async_session_factory():
+    """Return the async session factory for creating standalone sessions.
+
+    Used by background tasks that need their own session outside the
+    request lifecycle. Raises RuntimeError if engine not initialized.
+    """
+    if _session_factory is None:
+        raise RuntimeError(
+            "Database engine has not been initialised. "
+            "Call build_engine() during application startup."
+        )
+    return _session_factory()
+
+
 # ---------------------------------------------------------------------------
 # DB initialisation
 # ---------------------------------------------------------------------------

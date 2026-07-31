@@ -28,14 +28,10 @@ VALID_STATUSES: frozenset[str] = frozenset(
         "extracted",
         "extraction_failed",
         "scored",
-        "approved_for_apply",
+        "tailored",
         "skipped",
-        "rejected_by_user",
-        "resume_failed",
-        "applying",
-        "apply_failed",
+        "declined",
         "applied",
-        "manually_applied",
     }
 )
 

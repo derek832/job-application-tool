@@ -1,4 +1,4 @@
-"""Unit tests for the scoring pipeline stage.
+﻿"""Unit tests for the scoring pipeline stage.
 
 Tests cover the full routing logic: good fit, stretch role, skip, deal-breaker
 override, and threshold boundary detection with notifications.
@@ -101,7 +101,7 @@ async def test_good_fit_routes_to_approved(async_session: AsyncSession) -> None:
 
     assert job.fit_score == 85
     assert job.fit_rationale == "Strong Python match with relevant experience."
-    assert job.status == "approved_for_apply"
+    assert job.status == "scored"
     assert job.scored_at is not None
     assert job.queue_reason is None
 
@@ -239,13 +239,13 @@ async def test_claude_deal_breaker_detection(async_session: AsyncSession) -> Non
 
 @pytest.mark.asyncio
 async def test_boundary_score_routes_to_human_queue(async_session: AsyncSession) -> None:
-    """A score within ±2 of a threshold routes to human queue."""
+    """A score within Â±2 of a threshold routes to human queue."""
     job = _make_job_record()
     async_session.add(job)
     await async_session.flush()
 
     mock_client = AsyncMock()
-    # Score of 76 is within ±2 of good_fit_threshold=75
+    # Score of 76 is within Â±2 of good_fit_threshold=75
     mock_client.score_fit.return_value = FitScoreResult(
         fit_score=76,
         rationale="Borderline good fit.",
@@ -343,13 +343,13 @@ async def test_score_and_rationale_stored_exactly(async_session: AsyncSession) -
 
 @pytest.mark.asyncio
 async def test_boundary_at_stretch_threshold(async_session: AsyncSession) -> None:
-    """A score within ±2 of stretch_threshold also routes to human queue."""
+    """A score within Â±2 of stretch_threshold also routes to human queue."""
     job = _make_job_record()
     async_session.add(job)
     await async_session.flush()
 
     mock_client = AsyncMock()
-    # Score of 51 is within ±2 of stretch_threshold=50
+    # Score of 51 is within Â±2 of stretch_threshold=50
     mock_client.score_fit.return_value = FitScoreResult(
         fit_score=51,
         rationale="Near stretch threshold.",
