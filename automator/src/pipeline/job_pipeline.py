@@ -29,7 +29,6 @@ from src.integrations.gdocs_client import GDocsClient
 from src.integrations.linkedin_scraper import discover_and_extract_jobs
 from src.integrations.ntfy_client import NtfyPayload, NtfySettings, publish
 from src.integrations.sms_gateway import SMSSettings
-from src.pipeline.easy_apply_stage import run_easy_apply
 from src.pipeline.health_checker import check_session_health
 from src.pipeline.notification_service import NotificationSettings, send_run_summary
 from src.pipeline.run_summary import RunStats, generate_summary_text, store_run_summary
@@ -727,114 +726,34 @@ async def run_pipeline(session: AsyncSession | None = None) -> None:
                             reason="Dry run — submission skipped",
                         )
                         job_record.applied_at = datetime.now(UTC).isoformat()
-                    elif job_record.apply_type == "easy_apply":
-                        await run_easy_apply(
-                            job_record=job_record,
-                            profile=user_profile,
-                            session=session,
-                            page=page,
-                            claude_client=claude_client,
-                            notification_settings=notification_settings,
-                            goals_profile=goals_json,
-                        )
                     else:
-                        # External apply routing based on configurable threshold:
-                        # - Score >= external_apply_threshold: auto-submit via Vision Agent
-                        # - Score below threshold: resume tailored, notify user to apply manually
-                        ext_threshold = settings.external_apply_threshold
+                        # Application ready — resume is tailored (PDF ready),
+                        # notify user and add to human queue for manual submission.
+                        from src.db.job_repo import update_job_status
+                        from src.pipeline.notification_service import notify
 
-                        if (job_record.fit_score or 0) >= ext_threshold:
-                            # High-match: attempt auto-submission via Vision Agent
-                            from src.agents.vision_agent import process_external_apply
+                        job_record.queue_reason = "resume_ready_apply"
+                        await update_job_status(
+                            session,
+                            job_record.id,
+                            "applying",
+                            reason="Resume tailored, awaiting manual submission",
+                        )
 
-                            cost_before_ext = claude_client.total_cost_usd
-                            result = await process_external_apply(
-                                job_record=job_record,
-                                profile=user_profile,
-                                page=page,
-                                claude_client=claude_client,
-                                min_salary=goals_profile.min_salary,
+                        if notification_settings:
+                            await notify(
                                 session=session,
-                                notification_settings=notification_settings,
-                                goals_profile_json=goals_json,
-                                supplementary_context=goals_profile.supplementary_context,
-                            )
-                            ext_cost = claude_client.total_cost_usd - cost_before_ext
-                            if ext_cost > 0:
-                                existing_cost = float(job_record.claude_cost_usd or "0")
-                                job_record.claude_cost_usd = str(
-                                    round(existing_cost + ext_cost, 6)
-                                )
-                            if result.ok:
-                                from src.db.job_repo import update_job_status
-
-                                job_record.applied_at = datetime.now(UTC).isoformat()
-                                if result.application_notes:
-                                    job_record.application_notes = result.application_notes
-                                await update_job_status(
-                                    session,
-                                    job_record.id,
-                                    "applied",
-                                    reason="External apply submitted via Vision Agent",
-                                )
-                                # Mark as applied on LinkedIn
-                                from src.integrations.linkedin_scraper import (
-                                    mark_as_applied_on_linkedin,
-                                )
-
-                                await mark_as_applied_on_linkedin(page, job_record.linkedin_url)
-                            elif result.reason == "escalation_created":
-                                # Escalation was created — pipeline is paused for this job
-                                # Job status is managed by the escalation engine
-                                from src.db.job_repo import update_job_status
-
-                                job_record.queue_reason = "escalation_pending"
-                                await update_job_status(
-                                    session,
-                                    job_record.id,
-                                    "human_queue",
-                                    reason=f"Escalation created: {result.error}",
-                                )
-                            else:
-                                from src.db.job_repo import update_job_status
-
-                                job_record.error_message = result.error
-                                job_record.queue_reason = result.reason or "apply_failed"
-                                await update_job_status(
-                                    session,
-                                    job_record.id,
-                                    "apply_failed",
-                                    reason=f"External apply failed: {result.error}",
-                                )
-                        else:
-                            # Below auto-apply threshold: resume is tailored (PDF ready),
-                            # notify user and add to human queue for manual submission.
-                            from src.db.job_repo import update_job_status
-                            from src.pipeline.notification_service import notify
-
-                            job_record.queue_reason = "resume_ready_external_apply"
-                            await update_job_status(
-                                session,
-                                job_record.id,
-                                "applying",
-                                reason="External apply — resume tailored, "
-                                "awaiting manual submission",
+                                job_record=job_record,
+                                trigger_reason="resume_ready_go_apply",
+                                settings=notification_settings,
                             )
 
-                            if notification_settings:
-                                await notify(
-                                    session=session,
-                                    job_record=job_record,
-                                    trigger_reason="resume_ready_go_apply",
-                                    settings=notification_settings,
-                                )
-
-                            logger.info(
-                                "pipeline_external_apply_resume_ready",
-                                job_id=job_record.id,
-                                fit_score=job_record.fit_score,
-                                pdf_path=job_record.tailored_resume_pdf,
-                            )
+                        logger.info(
+                            "pipeline_resume_ready",
+                            job_id=job_record.id,
+                            fit_score=job_record.fit_score,
+                            pdf_path=job_record.tailored_resume_pdf,
+                        )
 
                     # Step 10: Restore resume base after each application
                     await restore_resume_base(

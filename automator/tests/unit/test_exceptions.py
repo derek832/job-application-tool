@@ -1,4 +1,4 @@
-"""Unit tests for custom exception classes."""
+﻿"""Unit tests for custom exception classes."""
 
 import pytest
 
@@ -12,7 +12,6 @@ from src.exceptions import (
     ScoringError,
     SMSError,
     TailoringError,
-    VisionAgentError,
 )
 
 
@@ -48,7 +47,6 @@ class TestSubclassInheritance:
             ScoringError,
             TailoringError,
             ApplyError,
-            VisionAgentError,
             GDocsError,
             SMSError,
             ConfigError,
@@ -65,7 +63,6 @@ class TestSubclassInheritance:
             ScoringError,
             TailoringError,
             ApplyError,
-            VisionAgentError,
             SMSError,
             ConfigError,
             PipelineError,
@@ -83,7 +80,6 @@ class TestSubclassInheritance:
             ScoringError,
             TailoringError,
             ApplyError,
-            VisionAgentError,
             SMSError,
             ConfigError,
             PipelineError,

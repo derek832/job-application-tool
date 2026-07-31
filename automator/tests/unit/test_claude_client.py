@@ -5,7 +5,6 @@ Tests cover:
 - Pydantic validation of responses
 - Retry logic on API errors
 - Proper exception raising on exhaustion
-- Vision API calls for form field identification
 """
 
 from __future__ import annotations
@@ -20,9 +19,8 @@ from src.agents.claude_client import (
     RETRY_BACKOFFS,
     ClaudeClient,
     FitScoreResult,
-    FormField,
 )
-from src.exceptions import ScoringError, TailoringError, VisionAgentError
+from src.exceptions import ScoringError, TailoringError
 
 
 @pytest.fixture
@@ -83,33 +81,6 @@ class TestFitScoreResult:
         )
         assert result.deal_breaker_found is True
         assert result.deal_breaker_term == "security clearance"
-
-
-# ---------------------------------------------------------------------------
-# FormField model tests
-# ---------------------------------------------------------------------------
-
-
-class TestFormField:
-    """Tests for the FormField Pydantic model."""
-
-    def test_valid_field(self) -> None:
-        field = FormField(
-            field_id="field_1",
-            label="Full Name",
-            field_type="text",
-            suggested_value="John Doe",
-        )
-        assert field.field_id == "field_1"
-        assert field.suggested_value == "John Doe"
-
-    def test_field_without_suggested_value(self) -> None:
-        field = FormField(
-            field_id="field_2",
-            label="Cover Letter",
-            field_type="textarea",
-        )
-        assert field.suggested_value is None
 
 
 # ---------------------------------------------------------------------------
@@ -222,63 +193,6 @@ class TestGenerateCoverLetter:
 # ---------------------------------------------------------------------------
 
 
-class TestIdentifyFormFields:
-    """Tests for ClaudeClient.identify_form_fields."""
-
-    @pytest.mark.asyncio
-    async def test_successful_identification(self, client: ClaudeClient) -> None:
-        fields_data = [
-            {
-                "field_id": "field_1",
-                "label": "Full Name",
-                "field_type": "text",
-                "suggested_value": "John Doe",
-            },
-            {
-                "field_id": "field_2",
-                "label": "Email",
-                "field_type": "text",
-                "suggested_value": "john@example.com",
-            },
-        ]
-        mock_response = _make_response(json.dumps(fields_data))
-
-        with patch.object(client._client.messages, "create", new_callable=AsyncMock) as mock_create:
-            mock_create.return_value = mock_response
-            result = await client.identify_form_fields(
-                screenshot_bytes=b"\x89PNG\r\n\x1a\n" + b"\x00" * 100,
-                profile='{"full_name": "John Doe", "email": "john@example.com"}',
-            )
-
-        assert len(result) == 2
-        assert all(isinstance(f, FormField) for f in result)
-        assert result[0].label == "Full Name"
-        assert result[1].suggested_value == "john@example.com"
-
-    @pytest.mark.asyncio
-    async def test_invalid_json_raises_vision_error(self, client: ClaudeClient) -> None:
-        mock_response = _make_response("not json at all")
-
-        with patch.object(client._client.messages, "create", new_callable=AsyncMock) as mock_create:
-            mock_create.return_value = mock_response
-            with pytest.raises(VisionAgentError, match="Failed to parse"):
-                await client.identify_form_fields(
-                    screenshot_bytes=b"\x89PNG" + b"\x00" * 50,
-                    profile="{}",
-                )
-
-    @pytest.mark.asyncio
-    async def test_non_list_response_raises_vision_error(self, client: ClaudeClient) -> None:
-        mock_response = _make_response(json.dumps({"not": "a list"}))
-
-        with patch.object(client._client.messages, "create", new_callable=AsyncMock) as mock_create:
-            mock_create.return_value = mock_response
-            with pytest.raises(VisionAgentError, match="Failed to parse"):
-                await client.identify_form_fields(
-                    screenshot_bytes=b"\x89PNG" + b"\x00" * 50,
-                    profile="{}",
-                )
-
 
 # ---------------------------------------------------------------------------
 # Retry logic tests
@@ -362,24 +276,6 @@ class TestRetryLogic:
                     await client.tailor_resume(
                         description="Job desc",
                         resume_base="Resume",
-                    )
-
-    @pytest.mark.asyncio
-    async def test_vision_raises_vision_error_on_exhaustion(self, client: ClaudeClient) -> None:
-        async def always_fail(**kwargs):
-            raise anthropic.APIError(
-                message="Persistent failure",
-                request=MagicMock(),
-                body=None,
-            )
-
-        with patch.object(client._client.messages, "create", new_callable=AsyncMock) as mock_create:
-            mock_create.side_effect = always_fail
-            with patch("src.agents.claude_client.asyncio.sleep", new_callable=AsyncMock):
-                with pytest.raises(VisionAgentError, match="failed after 3 attempts"):
-                    await client.identify_form_fields(
-                        screenshot_bytes=b"\x89PNG" + b"\x00" * 50,
-                        profile="{}",
                     )
 
     @pytest.mark.asyncio

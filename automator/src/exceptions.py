@@ -39,10 +39,6 @@ class ApplyError(AutomatorError):
     """Raised when Easy Apply or external form submission fails."""
 
 
-class VisionAgentError(AutomatorError):
-    """Raised when the Vision Agent cannot parse or fill an external application form."""
-
-
 class GDocsError(AutomatorError):
     """Raised when Google Apps Script communication fails.
 

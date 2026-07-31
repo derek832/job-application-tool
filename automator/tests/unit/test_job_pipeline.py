@@ -289,7 +289,6 @@ async def test_pipeline_idempotent_on_terminal_state_jobs(async_session: AsyncSe
 
     mock_scoring = AsyncMock()
     mock_tailoring = AsyncMock()
-    mock_easy_apply = AsyncMock()
     mock_restore = AsyncMock()
 
     with (
@@ -306,7 +305,6 @@ async def test_pipeline_idempotent_on_terminal_state_jobs(async_session: AsyncSe
         ),
         patch("src.pipeline.job_pipeline.run_scoring", mock_scoring),
         patch("src.pipeline.job_pipeline.run_tailoring", mock_tailoring),
-        patch("src.pipeline.job_pipeline.run_easy_apply", mock_easy_apply),
         patch("src.pipeline.job_pipeline.restore_resume_base", mock_restore),
     ):
         mock_async_pw.return_value.start = AsyncMock(return_value=mock_pw)
@@ -316,7 +314,6 @@ async def test_pipeline_idempotent_on_terminal_state_jobs(async_session: AsyncSe
     # Verify: no pipeline stages were called (no actionable jobs)
     mock_scoring.assert_not_called()
     mock_tailoring.assert_not_called()
-    mock_easy_apply.assert_not_called()
     mock_restore.assert_not_called()
 
     # Verify: terminal-state jobs have not changed status or updated_at
@@ -340,7 +337,7 @@ async def test_pipeline_idempotent_on_terminal_state_jobs(async_session: AsyncSe
 @pytest.mark.asyncio
 async def test_pipeline_calls_all_stages_in_order(async_session: AsyncSession):
     """Pipeline calls all stages in the correct order: discovery → extraction →
-    scoring → tailoring → easy_apply → restore_resume.
+    scoring → tailoring → restore_resume.
 
     Validates: Requirements 1.1, 5.4, 14.4
     """
@@ -417,12 +414,6 @@ async def test_pipeline_calls_all_stages_in_order(async_session: AsyncSession):
         sess = kwargs.get("session") or args[1]
         await sess.flush()
 
-    async def mock_easy_apply_fn(*args, **kwargs):
-        call_order.append("easy_apply")
-        # Simulate successful application
-        job_record = kwargs.get("job_record") or args[0]
-        job_record.status = "applied"
-
     async def mock_restore_fn(*args, **kwargs):
         call_order.append("restore_resume")
 
@@ -439,7 +430,6 @@ async def test_pipeline_calls_all_stages_in_order(async_session: AsyncSession):
         ),
         patch("src.pipeline.job_pipeline.run_scoring", side_effect=mock_scoring_fn),
         patch("src.pipeline.job_pipeline.run_tailoring", side_effect=mock_tailoring_fn),
-        patch("src.pipeline.job_pipeline.run_easy_apply", side_effect=mock_easy_apply_fn),
         patch("src.pipeline.job_pipeline.restore_resume_base", side_effect=mock_restore_fn),
     ):
         mock_async_pw.return_value.start = AsyncMock(return_value=mock_pw)
@@ -451,14 +441,12 @@ async def test_pipeline_calls_all_stages_in_order(async_session: AsyncSession):
     assert "discover" in call_order, "Discovery stage was not called"
     assert "scoring" in call_order, "Scoring stage was not called"
     assert "tailoring" in call_order, "Tailoring stage was not called"
-    assert "easy_apply" in call_order, "Easy Apply stage was not called"
     assert "restore_resume" in call_order, "Restore resume stage was not called"
 
     # Verify ordering: each stage comes after its predecessor
     assert call_order.index("discover") < call_order.index("scoring")
     assert call_order.index("scoring") < call_order.index("tailoring")
-    assert call_order.index("tailoring") < call_order.index("easy_apply")
-    assert call_order.index("easy_apply") < call_order.index("restore_resume")
+    assert call_order.index("tailoring") < call_order.index("restore_resume")
 
 
 @pytest.mark.asyncio

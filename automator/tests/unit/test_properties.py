@@ -13,19 +13,18 @@ from datetime import UTC, datetime, timedelta
 from urllib.parse import parse_qs, urlparse
 
 import pytest
-from hypothesis import HealthCheck, given, settings
+from hypothesis import given, settings
 from hypothesis import strategies as st
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
-from src.api.schemas import SearchConfig, UserProfile
+from src.api.schemas import SearchConfig
 from src.db.models import VALID_STATUSES, Base, JobRecord, NotificationLog
 from src.integrations.linkedin_scraper import build_search_url
 from src.integrations.sms_gateway import ACTION_PROMPT, SMS_MAX_LENGTH, compose_sms
 from src.integrations.sms_rate_limiter import check_rate_limit
 from src.pipeline.fit_classifier import classify_fit, is_threshold_boundary
 from src.pipeline.prefilter import check_title_exclusions
-
 
 # ---------------------------------------------------------------------------
 # Strategies
@@ -675,60 +674,6 @@ def test_threshold_boundary_detection(
 # Property 15: Vision Agent Field Mapping Coverage
 # ---------------------------------------------------------------------------
 
-
-@given(
-    full_name=st.text(
-        alphabet=st.characters(whitelist_categories=("L",), min_codepoint=65),
-        min_size=3,
-        max_size=30,
-    ),
-    email=st.from_regex(r"[a-z]{3,10}@[a-z]{3,8}\.(com|org|net)", fullmatch=True),
-    phone=st.from_regex(r"[0-9]{10}", fullmatch=True),
-)
-@settings(max_examples=100)
-def test_vision_agent_field_mapping_coverage(
-    full_name: str, email: str, phone: str
-) -> None:
-    """For DOM fields with labels matching known profile keys, fill plan includes values."""
-    from src.agents.vision_agent import _build_fill_plan
-
-    profile = UserProfile(
-        full_name=full_name,
-        email=email,
-        phone=phone,
-        location="New York, NY",
-        work_auth="US Citizen",
-        linkedin_url="https://linkedin.com/in/test",
-        common_answers={},
-    )
-
-    # DOM fields with labels that match known profile keys
-    dom_fields = [
-        {"label": "Full Name", "type": "text", "selector": "#name", "id": "name", "name": "name", "tag": "input", "value": ""},
-        {"label": "Email Address", "type": "email", "selector": "#email", "id": "email", "name": "email", "tag": "input", "value": ""},
-        {"label": "Phone Number", "type": "tel", "selector": "#phone", "id": "phone", "name": "phone", "tag": "input", "value": ""},
-        {"label": "Unknown Custom Field XYZ", "type": "text", "selector": "#custom", "id": "custom", "name": "custom", "tag": "input", "value": ""},
-    ]
-
-    fill_plan = _build_fill_plan(dom_fields, profile, min_salary=None)
-
-    # Known fields should be in the plan
-    plan_labels = [item["label"] for item in fill_plan]
-    assert "Full Name" in plan_labels
-    assert "Email Address" in plan_labels
-    assert "Phone Number" in plan_labels
-
-    # Unknown field should NOT be in the plan
-    assert "Unknown Custom Field XYZ" not in plan_labels
-
-    # Values should match profile
-    for item in fill_plan:
-        if item["label"] == "Full Name":
-            assert item["value"] == full_name
-        elif item["label"] == "Email Address":
-            assert item["value"] == email
-        elif item["label"] == "Phone Number":
-            assert item["value"] == phone
 
 
 # ---------------------------------------------------------------------------
