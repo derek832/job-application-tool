@@ -198,7 +198,11 @@ function ReadyCard({ item, disabled, onApplied, onDecline }: ReadyCardProps): Re
           >
             {item.job_title}
           </a>
-          <p className="text-xs text-gray-500 mt-0.5">{item.company}</p>
+          <p className="text-xs text-gray-500 mt-0.5">
+            {item.company}
+            <span className="mx-1.5 text-gray-300">·</span>
+            <span className="text-gray-400">Found {formatTime(item.discovered_at)}</span>
+          </p>
         </div>
         <div className="flex items-center gap-2 shrink-0">
           {item.fit_score !== null && (
@@ -298,7 +302,11 @@ function ReviewCard({ item, disabled, onApprove, onSkip }: ReviewCardProps): Rea
           >
             {item.job_title}
           </a>
-          <p className="text-xs text-gray-500 mt-0.5">{item.company}</p>
+          <p className="text-xs text-gray-500 mt-0.5">
+            {item.company}
+            <span className="mx-1.5 text-gray-300">·</span>
+            <span className="text-gray-400">Found {formatTime(item.discovered_at)}</span>
+          </p>
         </div>
         {item.fit_score !== null && (
           <span className="shrink-0 inline-flex items-center px-2 py-0.5 rounded-md text-xs font-medium bg-amber-50 text-amber-700">
@@ -313,7 +321,6 @@ function ReviewCard({ item, disabled, onApprove, onSkip }: ReviewCardProps): Rea
             {item.queue_reason === "stretch_role" ? "Stretch Role" : "Threshold Score"}
           </span>
         )}
-        <span className="text-xs text-gray-400">{formatTime(item.added_at)}</span>
       </div>
 
       {item.fit_rationale && (

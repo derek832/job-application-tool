@@ -300,6 +300,7 @@ class QueueItemOut(BaseModel):
     status: str
     tailored_resume_pdf: str | None = None
     tailored_resume_text: str | None = None
+    discovered_at: str
     added_at: str
 
 

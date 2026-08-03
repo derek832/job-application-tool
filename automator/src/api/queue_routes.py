@@ -42,6 +42,7 @@ def _to_queue_item(record) -> QueueItemOut:
         status=record.status,
         tailored_resume_pdf=record.tailored_resume_pdf,
         tailored_resume_text=record.tailored_resume_text,
+        discovered_at=record.discovered_at,
         added_at=record.updated_at,
     )
 

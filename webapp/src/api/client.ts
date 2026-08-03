@@ -108,6 +108,7 @@ export const QueueItemOutSchema = z.object({
   status: z.string(),
   tailored_resume_pdf: z.string().nullable(),
   tailored_resume_text: z.string().nullable(),
+  discovered_at: z.string(),
   added_at: z.string(),
 });
 
