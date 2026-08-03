@@ -284,6 +284,7 @@ class QueueItemOut(BaseModel):
         fit_rationale: Claude's explanation of the score.
         status: Current job status (scored, tailored, etc.).
         tailored_resume_pdf: Path to tailored PDF if available.
+        tailored_resume_text: JSON array of find/replace edits if available.
         added_at: ISO 8601 timestamp when the item was added to the queue.
     """
 
@@ -298,6 +299,7 @@ class QueueItemOut(BaseModel):
     fit_rationale: str | None = None
     status: str
     tailored_resume_pdf: str | None = None
+    tailored_resume_text: str | None = None
     added_at: str
 
 

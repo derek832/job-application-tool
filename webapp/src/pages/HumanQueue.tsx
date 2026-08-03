@@ -184,10 +184,12 @@ interface ReadyCardProps {
 }
 
 function ReadyCard({ item, disabled, onApplied, onDecline }: ReadyCardProps): React.JSX.Element {
+  const [expanded, setExpanded] = useState(false);
+
   return (
     <div className="bg-white rounded-xl border border-green-100 p-4 shadow-sm">
       <div className="flex items-start justify-between gap-3 mb-3">
-        <div className="min-w-0">
+        <div className="min-w-0 flex-1">
           <a
             href={item.linkedin_url}
             target="_blank"
@@ -198,12 +200,45 @@ function ReadyCard({ item, disabled, onApplied, onDecline }: ReadyCardProps): Re
           </a>
           <p className="text-xs text-gray-500 mt-0.5">{item.company}</p>
         </div>
-        {item.fit_score !== null && (
-          <span className="shrink-0 inline-flex items-center px-2 py-0.5 rounded-md text-xs font-medium bg-green-50 text-green-700">
-            {item.fit_score}%
-          </span>
-        )}
+        <div className="flex items-center gap-2 shrink-0">
+          {item.fit_score !== null && (
+            <span className="inline-flex items-center px-2 py-0.5 rounded-md text-xs font-medium bg-green-50 text-green-700">
+              {item.fit_score}%
+            </span>
+          )}
+          <button
+            onClick={() => setExpanded(!expanded)}
+            className="p-1 text-gray-400 hover:text-gray-600 transition-colors"
+            aria-label={expanded ? "Collapse" : "Expand"}
+          >
+            <svg
+              className={`w-4 h-4 transition-transform ${expanded ? "rotate-180" : ""}`}
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke="currentColor"
+              strokeWidth={2}
+            >
+              <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
+            </svg>
+          </button>
+        </div>
       </div>
+
+      {/* Expanded details */}
+      {expanded && (
+        <div className="space-y-3 mb-3">
+          {item.fit_rationale && (
+            <div className="bg-gray-50 rounded-lg p-3">
+              <p className="text-xs font-medium text-gray-700 mb-1">Scoring Rationale</p>
+              <p className="text-xs text-gray-600 leading-relaxed">{item.fit_rationale}</p>
+            </div>
+          )}
+
+          {item.tailored_resume_text && (
+            <TailoringDetails replacementsJson={item.tailored_resume_text} />
+          )}
+        </div>
+      )}
 
       {/* Action buttons */}
       <div className="flex items-center gap-2">
@@ -332,6 +367,54 @@ function LoadingSkeleton(): React.JSX.Element {
       {[1, 2, 3].map((i) => (
         <div key={i} className="h-28 bg-gray-200 rounded-xl" />
       ))}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Tailoring details — shows ATS find/replace edits
+// ---------------------------------------------------------------------------
+
+function TailoringDetails({ replacementsJson }: { replacementsJson: string }): React.JSX.Element {
+  const [showAll, setShowAll] = useState(false);
+
+  let replacements: Array<{ find: string; replace: string }> = [];
+  try {
+    replacements = JSON.parse(replacementsJson);
+  } catch {
+    return (
+      <div className="bg-amber-50 rounded-lg p-3">
+        <p className="text-xs text-amber-700">Could not parse ATS optimizations</p>
+      </div>
+    );
+  }
+
+  if (!Array.isArray(replacements) || replacements.length === 0) return <></>;
+
+  const visible = showAll ? replacements : replacements.slice(0, 3);
+
+  return (
+    <div className="bg-blue-50 rounded-lg p-3">
+      <p className="text-xs font-medium text-blue-800 mb-2">
+        ATS Optimizations ({replacements.length} changes)
+      </p>
+      <div className="space-y-1.5">
+        {visible.map((r, i) => (
+          <div key={i} className="text-xs">
+            <span className="text-red-600 line-through">{r.find}</span>
+            <span className="text-gray-400 mx-1">→</span>
+            <span className="text-green-700 font-medium">{r.replace}</span>
+          </div>
+        ))}
+      </div>
+      {replacements.length > 3 && (
+        <button
+          onClick={() => setShowAll(!showAll)}
+          className="mt-2 text-xs text-blue-600 hover:underline"
+        >
+          {showAll ? "Show less" : `Show all ${replacements.length} changes`}
+        </button>
+      )}
     </div>
   );
 }

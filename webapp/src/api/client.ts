@@ -107,6 +107,7 @@ export const QueueItemOutSchema = z.object({
   fit_rationale: z.string().nullable(),
   status: z.string(),
   tailored_resume_pdf: z.string().nullable(),
+  tailored_resume_text: z.string().nullable(),
   added_at: z.string(),
 });
 

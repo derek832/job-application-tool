@@ -18,14 +18,16 @@ from pathlib import Path
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from sqlalchemy import text
-
-from src.db.database import async_engine
+from src.db.database import build_engine
 
 
 async def migrate() -> None:
     """Run the status migration."""
-    async with async_engine.begin() as conn:
+    from sqlalchemy import text
+
+    engine = build_engine()
+
+    async with engine.begin() as conn:
         # 1. manually_applied → applied
         result = await conn.execute(
             text("UPDATE job_records SET status = 'applied' WHERE status = 'manually_applied'")
