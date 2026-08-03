@@ -505,6 +505,30 @@ class ClaudeClient:
     # -----------------------------------------------------------------------
 
     @staticmethod
+    def _extract_text_from_response(response) -> str:
+        """Extract the text content from a Claude API response.
+
+        Handles responses that include ThinkingBlocks (extended thinking)
+        by finding the first TextBlock in the content array.
+
+        Args:
+            response: The raw API response from messages.create().
+
+        Returns:
+            The text content string.
+
+        Raises:
+            ValueError: If no text block is found in the response.
+        """
+        for block in response.content:
+            if hasattr(block, "text"):
+                return block.text
+        raise ValueError(
+            f"No text block found in response. "
+            f"Block types: {[type(b).__name__ for b in response.content]}"
+        )
+
+    @staticmethod
     def _extract_json(text: str) -> str:
         """Extract JSON from Claude's response, handling markdown code blocks.
 
@@ -609,7 +633,7 @@ class ClaudeClient:
                     cost_usd=round(call_cost, 6),
                     total_cost_usd=round(self.total_cost_usd, 6),
                 )
-                return response.content[0].text
+                return self._extract_text_from_response(response)
             except anthropic.APIError as exc:
                 last_error = exc
                 logger.warning(
