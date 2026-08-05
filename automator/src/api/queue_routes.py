@@ -1,4 +1,4 @@
-"""
+﻿"""
 Human Queue API routes for the LinkedIn Job Automator.
 
 Provides endpoints for listing pending queue items and resolving them via
@@ -11,7 +11,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 import structlog
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.api.schemas import QueueItemOut
@@ -72,14 +72,13 @@ async def list_queue_items(
 
 
 # ---------------------------------------------------------------------------
-# POST /queue/{job_id}/approve — trigger immediate tailoring
+# POST /queue/{job_id}/approve â€” trigger immediate tailoring
 # ---------------------------------------------------------------------------
 
 
 @router.post("/{job_id}/approve", response_model=QueueItemOut)
 async def approve_queue_item(
     job_id: str,
-    background_tasks: BackgroundTasks,
     session: AsyncSession = Depends(get_session),
     _: None = Depends(verify_token),
 ) -> QueueItemOut:
@@ -93,7 +92,7 @@ async def approve_queue_item(
         job_id: The LinkedIn job ID to approve.
 
     Returns:
-        The updated queue item (status still "scored" — tailoring is async).
+        The updated queue item (status still "scored" â€” tailoring is async).
 
     Raises:
         HTTPException: 404 if no job record exists with the given ID.
@@ -114,14 +113,17 @@ async def approve_queue_item(
 
     logger.info("queue_item_approved_for_tailoring", job_id=job_id)
 
-    # Schedule immediate tailoring in background
-    background_tasks.add_task(_run_tailoring_for_job, job_id)
+    # Schedule immediate tailoring in background via asyncio task
+    # (more reliable than BackgroundTasks for async functions)
+    import asyncio
+
+    asyncio.create_task(_run_tailoring_for_job(job_id))
 
     return _to_queue_item(record)
 
 
 # ---------------------------------------------------------------------------
-# POST /queue/{job_id}/skip — remove from queue without tailoring
+# POST /queue/{job_id}/skip â€” remove from queue without tailoring
 # ---------------------------------------------------------------------------
 
 
@@ -161,7 +163,7 @@ async def skip_queue_item(
 
 
 # ---------------------------------------------------------------------------
-# POST /queue/{job_id}/applied — user manually applied
+# POST /queue/{job_id}/applied â€” user manually applied
 # ---------------------------------------------------------------------------
 
 
@@ -204,7 +206,7 @@ async def mark_applied(
 
 
 # ---------------------------------------------------------------------------
-# POST /queue/{job_id}/decline — user chose not to apply
+# POST /queue/{job_id}/decline â€” user chose not to apply
 # ---------------------------------------------------------------------------
 
 
@@ -214,7 +216,7 @@ async def decline_queue_item(
     session: AsyncSession = Depends(get_session),
     _: None = Depends(verify_token),
 ) -> QueueItemOut:
-    """Decline a tailored job — user decided not to apply.
+    """Decline a tailored job â€” user decided not to apply.
 
     Sets the job status to "declined" and removes it from the queue.
 
@@ -247,48 +249,59 @@ async def decline_queue_item(
 # ---------------------------------------------------------------------------
 
 
+
+# ---------------------------------------------------------------------------
+# Background task: immediate tailoring
+# ---------------------------------------------------------------------------
+
+
 async def _run_tailoring_for_job(job_id: str) -> None:
     """Run tailoring for a single job as a background task.
 
     Creates its own DB session and loads required clients. On failure,
     logs the error but does not raise (background tasks should not crash).
     """
-    from src.db.database import async_session_factory
+    logger.info("bg_tailoring_started", job_id=job_id)
 
-    async with async_session_factory() as session:
-        record = await get_job_record(session, job_id)
-        if record is None:
-            logger.error("bg_tailoring_job_not_found", job_id=job_id)
-            return
+    try:
+        from src.db.database import async_session_factory
 
-        # Load required config
-        from src.db.config_repo import get_config
+        async with async_session_factory() as session:
+            record = await get_job_record(session, job_id)
+            if record is None:
+                logger.error("bg_tailoring_job_not_found", job_id=job_id)
+                return
 
-        settings_raw = await get_config(session, "settings")
-        goals_raw = await get_config(session, "goals_profile")
-        profile_raw = await get_config(session, "user_profile")
+            # Load required config
+            from src.db.config_repo import get_config
 
-        if not settings_raw or not settings_raw.get("claude_api_key"):
-            logger.error("bg_tailoring_no_api_key", job_id=job_id)
-            return
+            settings_raw = await get_config(session, "settings")
+            goals_raw = await get_config(session, "goals_profile")
+            profile_raw = await get_config(session, "user_profile")
 
-        from src.agents.claude_client import ClaudeClient
-        from src.api.schemas import GoalsProfile, UserProfile
-        from src.integrations.gdocs_client import GDocsClient
-        from src.pipeline.tailoring_stage import restore_resume_base, run_tailoring
+            if not settings_raw or not settings_raw.get("claude_api_key"):
+                logger.error("bg_tailoring_no_api_key", job_id=job_id)
+                return
 
-        claude_client = ClaudeClient(api_key=settings_raw["claude_api_key"])
-        goals_profile = GoalsProfile.model_validate(goals_raw or {})
-        user_profile = UserProfile.model_validate(profile_raw or {})
+            from src.agents.claude_client import ClaudeClient
+            from src.api.schemas import GoalsProfile, UserProfile
+            from src.integrations.gdocs_client import GDocsClient
+            from src.pipeline.tailoring_stage import (
+                restore_resume_base,
+                run_tailoring,
+            )
 
-        gdocs_url = settings_raw.get("gdocs_script_url")
-        if not gdocs_url:
-            logger.error("bg_tailoring_no_gdocs_url", job_id=job_id)
-            return
+            claude_client = ClaudeClient(api_key=settings_raw["claude_api_key"])
+            goals_profile = GoalsProfile.model_validate(goals_raw or {})
+            user_profile = UserProfile.model_validate(profile_raw or {})
 
-        gdocs_client = GDocsClient(script_url=gdocs_url)
+            gdocs_url = settings_raw.get("gdocs_script_url")
+            if not gdocs_url:
+                logger.error("bg_tailoring_no_gdocs_url", job_id=job_id)
+                return
 
-        try:
+            gdocs_client = GDocsClient(script_url=gdocs_url)
+
             await run_tailoring(
                 job_record=record,
                 session=session,
@@ -308,6 +321,10 @@ async def _run_tailoring_for_job(job_id: str) -> None:
             await session.commit()
             logger.info("bg_tailoring_complete", job_id=job_id)
 
-        except Exception as exc:
-            logger.error("bg_tailoring_failed", job_id=job_id, error=str(exc))
-            await session.rollback()
+    except Exception as exc:
+        logger.error(
+            "bg_tailoring_failed",
+            job_id=job_id,
+            error=str(exc),
+            error_type=type(exc).__name__,
+        )
