@@ -229,20 +229,34 @@ function clearUnderlineInElement(element) {
     var text = element.asText();
     var content = text.getText();
     if (content.length > 0) {
-      text.setUnderline(false);
+      // Use range-based setUnderline to clear per-character underline attributes.
+      // The blanket text.setUnderline(false) only sets the default attribute and
+      // does NOT override per-character overrides inherited during insertText.
+      text.setUnderline(0, content.length - 1, false);
       count++;
     }
   } else if (type === DocumentApp.ElementType.PARAGRAPH ||
              type === DocumentApp.ElementType.LIST_ITEM) {
-    // Clear paragraph-level underline attribute
-    var attrs = {};
-    attrs[DocumentApp.Attribute.UNDERLINE] = false;
-    element.setAttributes(attrs);
-    count++;
+    // Check if this is a section header (ALL CAPS, short text).
+    // Section headers like "SUMMARY", "CORE SKILLS & CERTIFICATIONS",
+    // "WORK EXPERIENCE" are intentionally underlined — skip them.
+    var paraText = element.getText().trim();
+    var isHeader = paraText.length > 0 &&
+                   paraText.length < 50 &&
+                   paraText === paraText.toUpperCase() &&
+                   /[A-Z]/.test(paraText);
 
-    var numChildren = element.getNumChildren();
-    for (var i = 0; i < numChildren; i++) {
-      count += clearUnderlineInElement(element.getChild(i));
+    if (!isHeader) {
+      // Clear paragraph-level underline attribute
+      var attrs = {};
+      attrs[DocumentApp.Attribute.UNDERLINE] = false;
+      element.setAttributes(attrs);
+      count++;
+
+      var numChildren = element.getNumChildren();
+      for (var i = 0; i < numChildren; i++) {
+        count += clearUnderlineInElement(element.getChild(i));
+      }
     }
   }
   return count;
