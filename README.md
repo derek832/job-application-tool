@@ -1,132 +1,146 @@
 # Job Application Tool
 
-A system that automatically finds jobs on LinkedIn, decides if they're a good fit for you using AI, customizes your resume, and applies — all running privately on your own computer.
+A LinkedIn job search assistant that runs on your computer. It finds jobs, scores them against your background using AI, tailors your resume for the ones that fit, and puts everything in front of you to review — so the actual applying is fast and informed.
 
 ---
 
-## What It Does
+## What It Actually Does
 
-Every weekday, this tool:
+Each pipeline run:
 
-1. Searches LinkedIn for new job postings matching your goals
-2. Uses AI (Claude) to score how well each job fits your background
-3. Automatically applies to strong matches with a tailored resume
-4. Sends you a push notification for borderline jobs so you can decide
-5. Skips anything that isn't a fit
+1. **Searches LinkedIn** for new job postings using your configured queries
+2. **Pre-filters** by title, keyword presence in the description, and salary floor — without calling the AI
+3. **Scores each surviving job** with Claude (0–100) across five dimensions: skills match, experience level, domain fit, requirements coverage, and interview likelihood
+4. **Routes based on score:**
+   - Strong fit (≥75 by default) → tailors your resume and notifies you it's ready
+   - Borderline or stretch (50–74) → drops it in the Human Queue for your review
+   - Below threshold → skipped
+5. **Resume tailoring:** for strong-fit jobs, reads your Google Doc resume, generates targeted keyword replacements via Claude, exports a tailored PDF, then restores your original document
+6. **Notifies you** via ntfy push notification when a job needs your attention or a resume is ready
 
-You control everything through a web app at `http://127.0.0.1:3000` — a local dashboard where you can see what's happening, review jobs, and change your settings.
+**What it does not do:** submit applications. The pipeline ends with a tailored PDF and a notification. You review the job, download the PDF, and apply yourself — or approve it from the Human Queue and apply from there.
 
 ---
 
 ## How It Works
 
-The tool runs inside Docker on your computer. Two containers work together: one does all the job-hunting work (the automator), and one serves the web interface (nginx). Nothing leaves your machine except calls to the services you explicitly configure.
-
 ```
 Your Computer
-├── Browser → http://127.0.0.1:3000 (your control panel)
-├── Chrome (background, separate profile)
-│   └── Logged into LinkedIn — the automator controls this session
+├── Chrome (separate profile, runs in background)
+│   └── Logged into LinkedIn — automator controls this via remote debugging
 └── Docker Compose
-    ├── Frontend (nginx) — serves the web app + proxies API requests
+    ├── Frontend (nginx)  — web app at http://127.0.0.1:3000
     └── Automator (FastAPI + scheduler)
-        ├── Browses LinkedIn for jobs via Chrome remote debugging
-        ├── Pre-filters by title, keywords, and salary floor
-        ├── Asks Claude to score each job fit (0-100)
-        ├── Tailors your resume via Google Docs + Apps Script
-        ├── Submits Easy Apply applications
-        └── Notifies you via ntfy when your input is needed
+        ├── Connects to Chrome via CDP (port 9222)
+        ├── Scrapes LinkedIn search results with Playwright
+        ├── Pre-filters by title/keywords/salary
+        ├── Scores with Claude API
+        ├── Tailors resume via Google Apps Script → Google Docs → PDF
+        └── Notifies via ntfy
 ```
 
----
-
-## Privacy & Cost
-
-- **Everything stays on your machine.** No data is sent anywhere except the services you explicitly set up.
-- **Only one paid service:** Claude AI. Expect roughly **$1–3 per day** during active job searching, depending on how many jobs get scored and tailored.
-- **All other services are free:** Docker, Google Docs, Google Apps Script, Gmail, LinkedIn, ntfy.
+The database is SQLite, stored locally at `data/state.db`. Nothing leaves your machine except calls to Anthropic, Google, and ntfy.
 
 ---
 
-## Getting Started
+## External Services
 
-### Prerequisites
+| Service | Purpose | Cost |
+|---|---|---|
+| **Anthropic Claude** | Job scoring and resume tailoring | ~$1–3/day during active use |
+| **Google Docs** | Stores your resume; source for tailoring | Free |
+| **Google Apps Script** | Reads/copies/exports your Google Doc as PDF | Free |
+| **ntfy** | Push notifications to your phone | Free |
+| **LinkedIn** | Where the jobs come from | Free (your existing account) |
+
+---
+
+## Prerequisites
 
 - [Docker Desktop](https://www.docker.com/products/docker-desktop/) installed and running
-- [Google Chrome](https://www.google.com/chrome/) installed at its default path — the automator controls a Chrome window to browse LinkedIn
-- Any modern browser for the web dashboard (Chrome, Firefox, Edge, Safari all work)
+- [Google Chrome](https://www.google.com/chrome/) at its default install path — used as the LinkedIn browser session
+- A LinkedIn account you're already logged into
+- A Google account (for Docs and Apps Script)
+- An Anthropic account with API credit
 
-No Node.js, Python, or other dev tools are needed. Everything runs inside Docker.
+---
 
-### Option A: Let Kiro Do It (Recommended)
+## Setup
 
-[Kiro](https://kiro.dev) is a free AI coding assistant that can run all the setup commands for you.
+See **`SETUP_GUIDE.md`** for the complete walkthrough. It covers:
 
-1. Download and install [Kiro](https://kiro.dev) (free)
-2. Open this project folder in Kiro
-3. Say: **"Walk me through the complete setup from scratch"**
+- Getting your Claude API key
+- Setting up the Google Docs resume and deploying the Apps Script
+- Configuring ntfy on your phone
+- Building and starting Docker
+- Running Chrome in debug mode
+- All configuration screens in the web app
+- How to customize the AI prompts for your specific background and industry
 
-Kiro will handle every step it can and explain the parts that require you to click through browser-based authorization flows.
-
-### Option B: Manual Setup
-
-The full step-by-step guide is in:
-
-```
-SETUP_GUIDE.md
-```
-
-It covers every external service, every configuration screen in the app, and how to customize the AI prompts for your specific industry and background. Estimated time: 60–90 minutes.
+Estimated setup time: 60–90 minutes.
 
 ---
 
 ## Starting the Tool
 
+**1. Start Chrome for LinkedIn:**
+
+Double-click `start-chrome-debug.bat`. This opens a separate Chrome profile with remote debugging enabled and saves the connection URL to `data/chrome-ws-url.txt`. You need to do this each time you restart your computer.
+
+**2. Start Docker:**
+
 ```bash
 docker compose up -d
 ```
 
-Then open [http://127.0.0.1:3000](http://127.0.0.1:3000). On your first visit you'll be prompted for your API token — this is the `API_TOKEN` value from your `.env` file (auto-generated on first start).
+**3. Open the web app:**
 
-Before each pipeline run, Chrome needs to be running with remote debugging enabled. Double-click `start-chrome-debug.bat` to launch it.
+[http://127.0.0.1:3000](http://127.0.0.1:3000)
+
+On first visit you'll be prompted for your API token. Find it by running:
+
+```bash
+docker compose logs automator | findstr "token"
+```
+
+Or check `API_TOKEN` in your `.env` file after the first startup.
 
 ---
 
-## Web App Pages
+## Web App
 
 | Page | What it's for |
 |---|---|
-| **Dashboard** | System status, Run Now, Preview Run, pause/resume, cost tracking, run history |
-| **Human Queue** | Review borderline jobs — Approve & Tailor, or Skip |
-| **Escalations** | External apply jobs with open-ended questions needing your review |
-| **Job History** | Browse all discovered jobs with status and score filtering |
-| **Search Config** | LinkedIn search queries, location, job type, experience level, remote preference |
+| **Dashboard** | System status, run now, preview run, pause/resume, cost tracking, run history |
+| **Human Queue** | Review borderline jobs — approve to trigger tailoring, or skip |
+| **Escalations** | Jobs that hit errors or edge cases needing manual attention |
+| **Job History** | All discovered jobs with status and score filtering |
+| **Search Config** | LinkedIn search queries (up to 10), location, job type, experience, remote |
 | **Goals Profile** | Target titles, deal breakers, salary floor, career objective, supplementary context |
 | **Profile** | Your contact info and pre-filled answers to common application questions |
-| **Settings** | API keys, score thresholds, ntfy notifications, dry run toggle |
+| **Settings** | Claude API key, GAS URL, score thresholds, ntfy config, dry run mode |
 | **Blacklist** | Companies and title patterns to permanently block |
-| **Scoring Trial** | Test Claude's scoring against any job description |
-| **Preview Results** | Results from preview/dry runs before going live |
+| **Scoring Trial** | Paste any job description and get an immediate Claude score |
+| **Preview Results** | Results from preview runs (discovery + scoring only, no tailoring) |
 
 ---
 
-## Daily Usage
+## Pipeline Schedule
 
-On a normal day this requires less than 5 minutes of attention.
-
-**If you restarted your computer:** double-click `start-chrome-debug.bat` to relaunch the LinkedIn browser session before the pipeline runs.
-
-**When you get a notification:** a job needs your review. Tap Approve or Reject directly from the ntfy notification, or open the Human Queue page in the web app.
-
-**The pipeline runs automatically** on weekdays between 8am–8pm Eastern. Use Run Now on the Dashboard to trigger it manually.
+Runs automatically on weekdays between 8am–8pm Eastern. Use **Run Now** on the Dashboard to trigger manually. Use **Preview Run** to test discovery and scoring without triggering any tailoring or notifications.
 
 ---
 
 ## Resume Tailoring
 
-The tool makes targeted keyword replacements in a copy of your Google Doc resume, exports it as a PDF, and submits that PDF. Your original document is never modified.
+The tailoring process:
+1. Reads your Google Doc resume via Apps Script
+2. Sends it to Claude with the job description → Claude returns a list of `{find, replace}` pairs (8–15 targeted substitutions to optimize for ATS keywords)
+3. Apps Script copies your original doc, applies the replacements while preserving bold/italic formatting, exports the copy as PDF, and deletes the copy
+4. The PDF is saved to `data/pdfs/`
+5. Your original Google Doc is restored to its untouched state
 
-**One formatting note:** if your resume has bold text transitioning to non-bold mid-line (e.g., `**Category Label:** item one, item two`), replacements that span that boundary can inherit incorrect bold formatting in the exported PDF. This doesn't affect ATS parsing — it's purely visual. To avoid it, keep bold formatting on standalone elements only (section headers, labels before a colon) with consistently non-bold text following.
+Your original document is never modified.
 
 ---
 
@@ -134,11 +148,11 @@ The tool makes targeted keyword replacements in a copy of your Google Doc resume
 
 | What | Command |
 |---|---|
-| Start the tool | `docker compose up -d` |
-| Stop the tool | `docker compose down` |
-| Watch live logs | `docker compose logs automator --follow` |
-| Rebuild after code changes | `docker compose build automator` then `docker compose up -d automator` |
-| Rebuild everything | `docker compose build` then `docker compose up -d` |
+| Start | `docker compose up -d` |
+| Stop | `docker compose down` |
+| Logs (live) | `docker compose logs automator --follow` |
+| Rebuild automator | `docker compose build automator` then `docker compose up -d automator` |
+| Rebuild all | `docker compose build` then `docker compose up -d` |
 
 ---
 
