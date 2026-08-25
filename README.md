@@ -50,7 +50,8 @@ Your Computer
 ### Prerequisites
 
 - [Docker Desktop](https://www.docker.com/products/docker-desktop/) installed and running
-- A modern web browser (Chrome, Firefox, Edge, Safari — any will work)
+- [Google Chrome](https://www.google.com/chrome/) installed at its default path — the automator controls a Chrome window to browse LinkedIn
+- Any modern browser for the web dashboard (Chrome, Firefox, Edge, Safari)
 
 No Node.js installation is needed. No browser extensions are needed. The web app is built entirely inside Docker.
 
@@ -101,10 +102,14 @@ On your first visit, you'll be prompted to enter your API token. This is the sam
 - **Job History** — browse everything the tool has found
 - **Settings** — change what you're looking for, adjust thresholds
 
-You'll get text messages when:
-- A job needs your review
+**Each day** (if you restarted your computer): double-click `start-chrome-debug.bat` to launch the LinkedIn browser session before the pipeline runs.
+
+You'll get push notifications (via ntfy) when:
+- A job needs your review — tap Approve or Reject directly from the notification
 - An application failed and needs your help
 - Something went wrong that the tool can't fix alone
+
+SMS via Gmail is also supported as a fallback notification channel.
 
 ---
 
@@ -112,7 +117,7 @@ You'll get text messages when:
 
 The ATS optimization works by making targeted text replacements in a copy of your Google Doc resume. Your original document is never modified. However, there's one thing to be aware of:
 
-**Bold text boundaries:** If your resume has bold text that transitions to non-bold mid-line (e.g., "**Security Operations:** Vulnerability Management, Incident Response"), and Claude tries to replace text that spans that boundary, the replacement may inherit incorrect bold formatting in the exported PDF.
+**Bold text boundaries:** If your resume has bold text that transitions to non-bold mid-line (e.g., `**Category Label:** skill one, skill two, skill three`), and Claude tries to replace text that spans that boundary, the replacement may inherit incorrect bold formatting in the exported PDF.
 
 **How to avoid this:** Keep bold formatting limited to standalone elements (section headers, category labels before a colon). Make sure the text *after* a bold label is consistently non-bold. This way, replacements only happen within uniformly-formatted text and the PDF looks correct.
 
