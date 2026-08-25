@@ -72,7 +72,7 @@ If you prefer to do it yourself, the full step-by-step guide is in:
 SETUP_GUIDE.md
 ```
 
-It assumes zero technical knowledge and explains every concept along the way.
+It covers every external service, every configuration screen in the app, and the AI prompt customization required to adapt the tool to your specific industry and background. Estimated time: 60–90 minutes.
 
 ---
 
