@@ -114,7 +114,7 @@ Claude is the AI that reads job descriptions and scores them. This is the only p
 CLAUDE_API_KEY=sk-ant-api03-...your-key-here...
 ```
 
-**Cost expectations:** At roughly 2,000 input tokens per job scored (job description + resume + scoring prompt), and Claude Sonnet 5 pricing, scoring 50 jobs costs around $0.10. Tailoring adds another ~$0.05 per resume. A typical month of active job searching costs $2–5.
+**Cost expectations:** Expect roughly **$1–3 per day** during active job searching. Each scoring call costs a few cents; tailoring adds a bit more. The cost scales with how many jobs LinkedIn surfaces that pass the pre-filters — busy days with lots of new postings cost more than quiet days.
 
 ---
 

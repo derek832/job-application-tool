@@ -8,31 +8,34 @@ A system that automatically finds jobs on LinkedIn, decides if they're a good fi
 
 Every weekday, this tool:
 
-1. Searches LinkedIn for new job postings matching what you're looking for
-2. Uses AI (Claude) to read each job and score how well it fits your goals
-3. Automatically applies to good-fit jobs with a tailored resume
-4. Texts you about borderline jobs so you can decide
-5. Skips jobs that aren't a match
+1. Searches LinkedIn for new job postings matching your goals
+2. Uses AI (Claude) to score how well each job fits your background
+3. Automatically applies to strong matches with a tailored resume
+4. Sends you a push notification for borderline jobs so you can decide
+5. Skips anything that isn't a fit
 
-You control everything through a web app at `http://127.0.0.1:3000` — a local dashboard in your browser where you can see what's happening, review jobs, and change your preferences.
+You control everything through a web app at `http://127.0.0.1:3000` — a local dashboard where you can see what's happening, review jobs, and change your settings.
 
 ---
 
 ## How It Works
 
-The tool runs inside Docker on your computer. Two containers work together: one does all the job-hunting work (the automator), and one serves the web interface you interact with (nginx). Nothing is shared with the outside world except the specific services you connect (AI scoring, Gmail for texts, Google Docs for your resume).
+The tool runs inside Docker on your computer. Two containers work together: one does all the job-hunting work (the automator), and one serves the web interface (nginx). Nothing leaves your machine except calls to the services you explicitly configure.
 
 ```
 Your Computer
 ├── Browser → http://127.0.0.1:3000 (your control panel)
+├── Chrome (background, separate profile)
+│   └── Logged into LinkedIn — the automator controls this session
 └── Docker Compose
     ├── Frontend (nginx) — serves the web app + proxies API requests
-    └── Automator (FastAPI)
-        ├── Browses LinkedIn for jobs
-        ├── Asks AI to score each job
-        ├── Edits your resume in Google Docs
-        ├── Applies to jobs automatically
-        └── Texts you when it needs your input
+    └── Automator (FastAPI + scheduler)
+        ├── Browses LinkedIn for jobs via Chrome remote debugging
+        ├── Pre-filters by title, keywords, and salary floor
+        ├── Asks Claude to score each job fit (0-100)
+        ├── Tailors your resume via Google Docs + Apps Script
+        ├── Submits Easy Apply applications
+        └── Notifies you via ntfy when your input is needed
 ```
 
 ---
@@ -40,8 +43,8 @@ Your Computer
 ## Privacy & Cost
 
 - **Everything stays on your machine.** No data is sent anywhere except the services you explicitly set up.
-- **Only one paid service:** Claude AI costs roughly $1–5/month depending on how many jobs get scored.
-- **All other services are free:** Docker, Gmail, Google Docs, Google Apps Script, LinkedIn.
+- **Only one paid service:** Claude AI. Expect roughly **$1–3 per day** during active job searching, depending on how many jobs get scored and tailored.
+- **All other services are free:** Docker, Google Docs, Google Apps Script, Gmail, LinkedIn, ntfy.
 
 ---
 
@@ -51,91 +54,91 @@ Your Computer
 
 - [Docker Desktop](https://www.docker.com/products/docker-desktop/) installed and running
 - [Google Chrome](https://www.google.com/chrome/) installed at its default path — the automator controls a Chrome window to browse LinkedIn
-- Any modern browser for the web dashboard (Chrome, Firefox, Edge, Safari)
+- Any modern browser for the web dashboard (Chrome, Firefox, Edge, Safari all work)
 
-No Node.js installation is needed. No browser extensions are needed. The web app is built entirely inside Docker.
+No Node.js, Python, or other dev tools are needed. Everything runs inside Docker.
 
 ### Option A: Let Kiro Do It (Recommended)
 
-[Kiro](https://kiro.dev) is a free AI coding assistant that can run all the setup commands for you. You don't need to understand terminals, code, or any of the technical details.
+[Kiro](https://kiro.dev) is a free AI coding assistant that can run all the setup commands for you.
 
 1. Download and install [Kiro](https://kiro.dev) (free)
 2. Open this project folder in Kiro
 3. Say: **"Walk me through the complete setup from scratch"**
 
-Kiro has a detailed setup guide built in and will handle every step it can — installing programs, running commands, building the tool, and explaining the parts that need you to click buttons in a browser (like creating accounts).
+Kiro will handle every step it can and explain the parts that require you to click through browser-based authorization flows.
 
 ### Option B: Manual Setup
 
-If you prefer to do it yourself, the full step-by-step guide is in:
+The full step-by-step guide is in:
 
 ```
 SETUP_GUIDE.md
 ```
 
-It covers every external service, every configuration screen in the app, and the AI prompt customization required to adapt the tool to your specific industry and background. Estimated time: 60–90 minutes.
+It covers every external service, every configuration screen in the app, and how to customize the AI prompts for your specific industry and background. Estimated time: 60–90 minutes.
 
 ---
 
 ## Starting the Tool
 
-One command starts everything — both the backend automator and the web interface:
-
 ```bash
 docker compose up -d
 ```
 
-Then open your browser to:
+Then open [http://127.0.0.1:3000](http://127.0.0.1:3000). On your first visit you'll be prompted for your API token — this is the `API_TOKEN` value from your `.env` file (auto-generated on first start).
 
-```
-http://127.0.0.1:3000
-```
-
-On your first visit, you'll be prompted to enter your API token. This is the same value as `API_TOKEN` in your `.env` file.
+Before each pipeline run, Chrome needs to be running with remote debugging enabled. Double-click `start-chrome-debug.bat` to launch it.
 
 ---
 
-## Daily Usage (Once Set Up)
+## Web App Pages
 
-- **Dashboard** — see status, start a manual run, pause/resume
-- **Human Queue** — review borderline jobs (approve or skip)
-- **Job History** — browse everything the tool has found
-- **Settings** — change what you're looking for, adjust thresholds
-
-**Each day** (if you restarted your computer): double-click `start-chrome-debug.bat` to launch the LinkedIn browser session before the pipeline runs.
-
-You'll get push notifications (via ntfy) when:
-- A job needs your review — tap Approve or Reject directly from the notification
-- An application failed and needs your help
-- Something went wrong that the tool can't fix alone
-
-SMS via Gmail is also supported as a fallback notification channel.
+| Page | What it's for |
+|---|---|
+| **Dashboard** | System status, Run Now, Preview Run, pause/resume, cost tracking, run history |
+| **Human Queue** | Review borderline jobs — Approve & Tailor, or Skip |
+| **Escalations** | External apply jobs with open-ended questions needing your review |
+| **Job History** | Browse all discovered jobs with status and score filtering |
+| **Search Config** | LinkedIn search queries, location, job type, experience level, remote preference |
+| **Goals Profile** | Target titles, deal breakers, salary floor, career objective, supplementary context |
+| **Profile** | Your contact info and pre-filled answers to common application questions |
+| **Settings** | API keys, score thresholds, ntfy notifications, dry run toggle |
+| **Blacklist** | Companies and title patterns to permanently block |
+| **Scoring Trial** | Test Claude's scoring against any job description |
+| **Preview Results** | Results from preview/dry runs before going live |
 
 ---
 
-## Resume Formatting Note
+## Daily Usage
 
-The ATS optimization works by making targeted text replacements in a copy of your Google Doc resume. Your original document is never modified. However, there's one thing to be aware of:
+On a normal day this requires less than 5 minutes of attention.
 
-**Bold text boundaries:** If your resume has bold text that transitions to non-bold mid-line (e.g., `**Category Label:** skill one, skill two, skill three`), and Claude tries to replace text that spans that boundary, the replacement may inherit incorrect bold formatting in the exported PDF.
+**If you restarted your computer:** double-click `start-chrome-debug.bat` to relaunch the LinkedIn browser session before the pipeline runs.
 
-**How to avoid this:** Keep bold formatting limited to standalone elements (section headers, category labels before a colon). Make sure the text *after* a bold label is consistently non-bold. This way, replacements only happen within uniformly-formatted text and the PDF looks correct.
+**When you get a notification:** a job needs your review. Tap Approve or Reject directly from the ntfy notification, or open the Human Queue page in the web app.
 
-ATS parsers ignore formatting entirely — they only read the text. So even if bold bleeds slightly, it won't affect your application's chances. It's purely a visual issue in the PDF.
+**The pipeline runs automatically** on weekdays between 8am–8pm Eastern. Use Run Now on the Dashboard to trigger it manually.
+
+---
+
+## Resume Tailoring
+
+The tool makes targeted keyword replacements in a copy of your Google Doc resume, exports it as a PDF, and submits that PDF. Your original document is never modified.
+
+**One formatting note:** if your resume has bold text transitioning to non-bold mid-line (e.g., `**Category Label:** item one, item two`), replacements that span that boundary can inherit incorrect bold formatting in the exported PDF. This doesn't affect ATS parsing — it's purely visual. To avoid it, keep bold formatting on standalone elements only (section headers, labels before a colon) with consistently non-bold text following.
 
 ---
 
 ## Quick Commands
 
 | What | Command |
-|------|---------|
+|---|---|
 | Start the tool | `docker compose up -d` |
 | Stop the tool | `docker compose down` |
-| See what it's doing | `docker compose logs automator --follow` |
-| See frontend logs | `docker compose logs frontend --follow` |
-| Rebuild after updates | `docker compose build` then `docker compose up -d` |
-
-Or just tell Kiro: "start the tool", "stop the tool", "show me the logs."
+| Watch live logs | `docker compose logs automator --follow` |
+| Rebuild after code changes | `docker compose build automator` then `docker compose up -d automator` |
+| Rebuild everything | `docker compose build` then `docker compose up -d` |
 
 ---
 
