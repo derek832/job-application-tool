@@ -350,7 +350,7 @@ This is the most important configuration. It tells Claude what you're looking fo
 Example (security/GRC professional):
 ```
 Recent projects: Led SOC 2 Type II recertification for a 400-person SaaS company 
-in Q1 2024, reducing scope creep by 40%. Built an automated evidence collection 
+in Q1, reducing scope creep by 40%. Built an automated evidence collection 
 workflow in Python that cut audit prep time by 60%.
 
 Additional skills not on resume: Hands-on with Wiz, Lacework, and AWS Security Hub. 

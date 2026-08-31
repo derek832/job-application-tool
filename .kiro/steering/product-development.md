@@ -6,7 +6,7 @@ inclusion: always
 
 ## Purpose
 
-This is the top-level product development steering file. It evaluates the current task and pulls in the appropriate sub-context. The goal of this product is singular: **get Derek a job**. Every decision flows from that.
+This is the top-level product development steering file. It evaluates the current task and pulls in the appropriate sub-context. The goal of this product is singular: **get the user a job**. Every decision flows from that.
 
 ## Product Mission
 

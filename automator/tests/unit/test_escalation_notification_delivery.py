@@ -125,7 +125,7 @@ def sample_form_state() -> dict:
     """Return a sample form state snapshot dict."""
     return {
         "external_url": "https://boards.greenhouse.io/techcorp/jobs/456",
-        "fields": [{"field_id": "f1", "label": "Name", "value": "Derek", "type": "text"}],
+        "fields": [{"field_id": "f1", "label": "Name", "value": "Alex", "type": "text"}],
         "page_title": "Apply - Backend Developer at TechCorp",
     }
 

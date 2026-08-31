@@ -1,8 +1,12 @@
-# Personal reference docs
+# Personal reference docs — never commit
 SKILLS_AND_CONTEXT.md
+SCORING_ANALYSIS.md
 PROMPT_WORK_NOTES.md
 Weekly Security-Compliance Notes/
 _all_notes_extracted.txt
+
+# Google Apps Script project ID — contains deployment-specific scriptId
+gas/.clasp.json
 
 # Secrets and local config
 .env

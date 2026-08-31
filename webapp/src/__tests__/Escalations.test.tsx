@@ -51,8 +51,8 @@ function makeEscalation(overrides: Record<string, unknown> = {}) {
     form_state_snapshot: {
       external_url: "https://boards.greenhouse.io/acme/jobs/123",
       fields: [
-        { field_id: "f1", label: "Full Name", value: "Derek Smith", type: "text" },
-        { field_id: "f2", label: "Email", value: "derek@example.com", type: "text" },
+        { field_id: "f1", label: "Full Name", value: "Alex Smith", type: "text" },
+        { field_id: "f2", label: "Email", value: "alex@example.com", type: "text" },
       ],
       screenshot_path: "/data/screenshots/esc-001.png",
       page_title: "Apply - Senior Engineer at Acme Corp",
@@ -314,7 +314,7 @@ describe("EscalationDetail", () => {
 
     // Form state fields
     expect(screen.getByText("Full Name")).toBeInTheDocument();
-    expect(screen.getByText("Derek Smith")).toBeInTheDocument();
+    expect(screen.getByText("Alex Smith")).toBeInTheDocument();
     expect(screen.getByText("Email")).toBeInTheDocument();
     expect(screen.getByText("derek@example.com")).toBeInTheDocument();
 

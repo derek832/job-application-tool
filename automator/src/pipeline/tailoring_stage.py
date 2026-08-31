@@ -32,7 +32,7 @@ PDF_OUTPUT_DIR = "data/pdfs"
 def _build_pdf_filename(full_name: str | None, company: str, job_title: str) -> str:
     """Build a professional, filesystem-safe PDF filename.
 
-    Produces filenames like: Derek_Smith_Acme_Corp_Software_Engineer_Resume.pdf
+    Produces filenames like: Jane_Smith_Acme_Corp_Software_Engineer_Resume.pdf
 
     Each component (name, company, title) is sanitized by replacing spaces with
     underscores and stripping characters that are unsafe for filesystems. If the
