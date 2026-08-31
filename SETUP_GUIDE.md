@@ -171,6 +171,8 @@ GOOGLE_APPS_SCRIPT_URL=https://script.google.com/macros/s/your-script-id/exec
 5. Value: the Document ID you copied in Step 3
 6. Click **Save script properties**
 
+> **For developers using clasp:** `gas/.clasp.json` is gitignored because it contains your personal script ID. Copy `gas/.clasp.json.example` to `gas/.clasp.json` and set `scriptId` to the ID from your Apps Script project URL before running `clasp push`.
+
 ---
 
 ## 7. Step 5 — Gmail OAuth (Notifications)

@@ -218,6 +218,8 @@ Additionally, the Gmail OAuth2 token file (`data/gmail_token.json`) must be gene
 
 The `gas/` directory contains the Google Apps Script source and is configured for deployment via `clasp` (the GAS CLI).
 
+> **Note:** `gas/.clasp.json` is gitignored because it contains your personal script ID. Copy `gas/.clasp.json.example` to `gas/.clasp.json` and fill in your script ID (the long string in your Apps Script project URL at script.google.com).
+
 ### CLI Deployment (Preferred)
 
 ```bash
